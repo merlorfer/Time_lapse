@@ -43,22 +43,38 @@ fi
 TIMESTAMP=$(date '+%Y-%m-%d_%H%M%S')
 OUTPUT="${FRAME_DIR}/${TIMESTAMP}.jpg"
 
-fswebcam \
-    --device "$CAMERA_DEVICE" \
-    --resolution "$RESOLUTION" \
-    --skip "$CAMERA_SKIP" \
-    --jpeg "$JPEG_QUALITY" \
-    --top-banner \
-    --banner-colour "#00000000" \
-    --font "${FONT_FILE}:${FONT_SIZE}" \
-    --subtitle "$(date '+%Y-%m-%d %H:%M:%S')" \
-    --no-timestamp \
-    "$OUTPUT" 2>> "$LOG"
+# Ha a preview fut, ustreamer /snapshot endpointból vesszük a képet (kamera megosztva),
+# egyébként fswebcam nyúl a kamerához közvetlenül.
+PREVIEW_PIDFILE="/tmp/timelapse_preview.pid"
+PREVIEW_RUNNING=false
+if [ -f "$PREVIEW_PIDFILE" ] && kill -0 "$(cat "$PREVIEW_PIDFILE")" 2>/dev/null; then
+    PREVIEW_RUNNING=true
+fi
 
-if [ $? -eq 0 ]; then
-    date +%s > "$LAST_CAPTURE_FILE"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') Captured: $OUTPUT (${FREE_MB}MB free)" >> "$LOG"
+if $PREVIEW_RUNNING; then
+    curl -sf "http://localhost:8081/snapshot" -o "$OUTPUT" 2>> "$LOG"
+    CAPTURE_OK=$?
+    METHOD="ustreamer snapshot"
 else
-    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: fswebcam failed" >> "$LOG"
+    fswebcam \
+        --device "$CAMERA_DEVICE" \
+        --resolution "$RESOLUTION" \
+        --skip "$CAMERA_SKIP" \
+        --jpeg "$JPEG_QUALITY" \
+        --top-banner \
+        --banner-colour "#00000000" \
+        --font "${FONT_FILE}:${FONT_SIZE}" \
+        --subtitle "$(date '+%Y-%m-%d %H:%M:%S')" \
+        --no-timestamp \
+        "$OUTPUT" 2>> "$LOG"
+    CAPTURE_OK=$?
+    METHOD="fswebcam"
+fi
+
+if [ $CAPTURE_OK -eq 0 ]; then
+    date +%s > "$LAST_CAPTURE_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Captured: $OUTPUT [${METHOD}] (${FREE_MB}MB free)" >> "$LOG"
+else
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: capture failed [${METHOD}]" >> "$LOG"
     exit 1
 fi

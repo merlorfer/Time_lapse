@@ -8,8 +8,8 @@
 source "$(dirname "$0")/config.sh"
 
 PREVIEW_PORT=8081
-PREVIEW_RES="640x480"
-PREVIEW_FPS=5
+PREVIEW_RES="1920x1080"
+PREVIEW_FPS=15
 PIDFILE="/tmp/timelapse_preview.pid"
 
 if [ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE)" 2>/dev/null; then
