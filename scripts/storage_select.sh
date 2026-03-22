@@ -95,9 +95,18 @@ case "$CHOICE" in
         if $MOUNT_CMD 2>/tmp/mount_err; then
             # UUID lekérése fstab frissítéshez
             NEW_UUID=$(blkid -s UUID -o value "$DEV_CHOICE")
+            # HTTP szerver újraindítása, hogy az USB mappájából szolgáljon
+            sudo systemctl restart timelapse-http 2>/dev/null
+            # Session konfig frissítése USB-re
+            mkdir -p "${USB_PATH}/archive" "${USB_PATH}/renders"
+            if [ -f /tmp/timelapse_session.conf ]; then
+                sed -i "s|VIDEO_BASE=.*|VIDEO_BASE=\"${USB_PATH}\"|" /tmp/timelapse_session.conf
+                sed -i "s|ARCHIVE_DIR=.*|ARCHIVE_DIR=\"${USB_PATH}/archive\"|" /tmp/timelapse_session.conf
+                sed -i "s|MASTER_VIDEO=.*|MASTER_VIDEO=\"${USB_PATH}/master.mp4\"|" /tmp/timelapse_session.conf
+            fi
             whiptail --title "Siker" --msgbox \
-                "Sikeresen mountolva:\n${DEV_CHOICE} → ${USB_PATH}\nFájlrendszer: ${FS}\nUUID: ${NEW_UUID}" \
-                10 58
+                "Sikeresen mountolva:\n${DEV_CHOICE} → ${USB_PATH}\nFájlrendszer: ${FS}\nUUID: ${NEW_UUID}\n\nHTTP szerver átváltva USB-re." \
+                11 58
         else
             ERR=$(cat /tmp/mount_err)
             whiptail --title "Hiba" --msgbox "Mountolás sikertelen:\n${ERR}" 10 58
