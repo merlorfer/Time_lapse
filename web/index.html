@@ -85,6 +85,23 @@ button:disabled { opacity: .35; cursor: not-allowed; }
 .form-row .hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
 .modal-btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
 
+/* ── Tabs ── */
+.tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--border); padding-bottom: 0; }
+.tab { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; color: var(--muted); padding: 7px 14px; font-size: 13px; cursor: pointer; margin-bottom: -1px; }
+.tab.active { color: var(--text); border-bottom-color: var(--accent); }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* ── Video list ── */
+.video-list { display: flex; flex-direction: column; gap: 8px; }
+.video-item { display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; }
+.video-item .vname { flex: 1; font-size: 13px; font-family: monospace; }
+.video-item .vsize { color: var(--muted); font-size: 12px; min-width: 70px; text-align: right; }
+.video-item .vdate { color: var(--muted); font-size: 12px; min-width: 105px; text-align: right; }
+.video-empty { color: var(--muted); font-size: 13px; padding: 12px 0; text-align: center; }
+.master-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: #1a2a1a; border: 1px solid #2d4a2d; border-radius: 8px; margin-bottom: 12px; }
+.master-row .vname { flex: 1; font-size: 13px; font-family: monospace; color: var(--green); }
+
 /* ── Spinner ── */
 .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,.2); border-top-color: #fff; border-radius: 50%; animation: spin .6s linear infinite; vertical-align: middle; margin-right: 6px; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -187,6 +204,22 @@ button:disabled { opacity: .35; cursor: not-allowed; }
     <div class="console" id="output"><span class="console-empty">Futtass egy parancsot...</span></div>
   </div>
 
+  <!-- Videos -->
+  <div class="card">
+    <div class="card-title" style="margin-bottom:0">Videók <button class="btn-gray" style="float:right;padding:4px 10px;font-size:11px" onclick="loadVideos()">↻</button></div>
+    <div class="tabs" style="margin-top:12px">
+      <button class="tab active" onclick="switchTab('archive')">📅 Napi videók</button>
+      <button class="tab"        onclick="switchTab('renders')">🎬 Manuális renderek</button>
+    </div>
+    <div id="tab-archive" class="tab-panel active">
+      <div id="master-row-wrap"></div>
+      <div id="video-list-archive" class="video-list"><div class="video-empty">Betöltés...</div></div>
+    </div>
+    <div id="tab-renders" class="tab-panel">
+      <div id="video-list-renders" class="video-list"><div class="video-empty">Betöltés...</div></div>
+    </div>
+  </div>
+
   <!-- Log viewer -->
   <div class="card">
     <div class="card-title">Logok</div>
@@ -237,6 +270,18 @@ button:disabled { opacity: .35; cursor: not-allowed; }
   </div>
 </div>
 
+<!-- Modal: Video Player -->
+<div class="overlay" id="player-modal">
+  <div class="modal" style="width:700px;max-width:96vw">
+    <h2 id="player-title">Videó</h2>
+    <video id="player-video" controls style="width:100%;border-radius:6px;background:#000;max-height:60vh"></video>
+    <div class="modal-btns" style="margin-top:14px">
+      <a id="player-download" href="#" download class="btn-blue" style="padding:9px 18px;border-radius:7px;font-size:13px;font-weight:500;text-decoration:none">⬇ Letöltés</a>
+      <button class="btn-gray" onclick="closePlayer()">Bezárás</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal: Render Now -->
 <div class="overlay" id="render-modal">
   <div class="modal">
@@ -264,6 +309,7 @@ let running        = false;
 document.addEventListener('DOMContentLoaded', () => {
   refreshStatus();
   loadLog();
+  loadVideos();
   statusInterval = setInterval(refreshStatus, 5000);
 });
 
@@ -380,6 +426,84 @@ function submitRender() {
   runScript('render_now', {
     output: document.getElementById('p-output').value,
   });
+}
+
+// ── Video list ───────────────────────────────────────────────────────────────
+async function loadVideos() {
+  try {
+    const data = await api('/api/videos');
+    renderVideoList('archive', data.archive || [], data.master);
+    renderVideoList('renders', data.renders || [], null);
+  } catch(e) {}
+}
+
+function renderVideoList(type, videos, master) {
+  const list = document.getElementById(`video-list-${type}`);
+
+  if (type === 'archive') {
+    const wrap = document.getElementById('master-row-wrap');
+    if (master) {
+      wrap.innerHTML = `<div class="master-row">
+        <div class="vname">🎬 master.mp4 <span style="color:var(--muted);font-size:11px">(teljes összefűzött)</span></div>
+        <div class="vsize">${fmtSize(master.size)}</div>
+        <div class="vdate">${fmtDate(master.mtime)}</div>
+        <button class="btn-green" style="padding:5px 12px;font-size:12px" onclick="playVideo('master.mp4','master')">▶</button>
+        <a href="http://${location.hostname}:8080/master.mp4" download class="btn-blue" style="padding:5px 12px;font-size:12px;text-decoration:none;border-radius:7px">⬇</a>
+      </div>`;
+    } else {
+      wrap.innerHTML = '';
+    }
+  }
+
+  if (videos.length === 0) {
+    list.innerHTML = '<div class="video-empty">Nincs videó.</div>';
+    return;
+  }
+
+  const subpath = type === 'archive' ? 'archive' : 'renders';
+  list.innerHTML = videos.map(v => `
+    <div class="video-item">
+      <div class="vname">${escHtml(v.name)}</div>
+      <div class="vsize">${fmtSize(v.size)}</div>
+      <div class="vdate">${fmtDate(v.mtime)}</div>
+      <button class="btn-blue" style="padding:5px 12px;font-size:12px" onclick="playVideo('${subpath}/${escHtml(v.name)}','${escHtml(v.name)}')">▶</button>
+      <a href="http://${location.hostname}:8080/${subpath}/${encodeURIComponent(v.name)}" download class="btn-gray" style="padding:5px 12px;font-size:12px;text-decoration:none;border-radius:7px;border:1px solid var(--border)">⬇</a>
+    </div>`).join('');
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById(`tab-${name}`).classList.add('active');
+  event.target.classList.add('active');
+}
+
+function playVideo(path, title) {
+  const url = `http://${location.hostname}:8080/${path}`;
+  document.getElementById('player-title').textContent = title;
+  const vid = document.getElementById('player-video');
+  vid.src = url;
+  document.getElementById('player-download').href = url;
+  document.getElementById('player-download').download = title;
+  document.getElementById('player-modal').classList.add('open');
+  vid.play();
+}
+
+function closePlayer() {
+  const vid = document.getElementById('player-video');
+  vid.pause();
+  vid.src = '';
+  document.getElementById('player-modal').classList.remove('open');
+}
+
+function fmtSize(bytes) {
+  if (bytes > 1073741824) return (bytes/1073741824).toFixed(1) + ' GB';
+  if (bytes > 1048576)    return (bytes/1048576).toFixed(1) + ' MB';
+  return (bytes/1024).toFixed(0) + ' KB';
+}
+
+function fmtDate(ts) {
+  return new Date(ts * 1000).toLocaleString('hu-HU', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
 }
 
 // ── Log viewer ───────────────────────────────────────────────────────────────

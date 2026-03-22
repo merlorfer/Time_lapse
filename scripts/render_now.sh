@@ -1,15 +1,17 @@
 #!/bin/bash
 # =============================================================================
 # render_now.sh – Azonnali videó renderelés a ramdisken lévő képekből
-# Használat: render_now.sh [--output /mnt/timelapse/archive/valami.mp4]
-# Ha nincs --output megadva, automatikus névvel menti az archívba.
+# Használat: render_now.sh [--output /mnt/timelapse/renders/valami.mp4]
+# Ha nincs --output megadva, automatikus névvel menti a renders/ mappába.
+# A renders/ mappa ELKÜLÖNÜL az archive/-tól, nem kerül bele a napi masterbe.
 # =============================================================================
 
 source "$(dirname "$0")/config.sh"
 [ -f /tmp/timelapse_session.conf ] && source /tmp/timelapse_session.conf
 
 LOG="${LOG_DIR}/compile.log"
-mkdir -p "$LOG_DIR" "$ARCHIVE_DIR"
+RENDERS_DIR="${VIDEO_BASE}/renders"
+mkdir -p "$LOG_DIR" "$RENDERS_DIR"
 
 # --- Opcionális --output paraméter ---
 OUTPUT=""
@@ -18,7 +20,7 @@ if [ "$1" = "--output" ] && [ -n "$2" ]; then
 fi
 
 if [ -z "$OUTPUT" ]; then
-    OUTPUT="${ARCHIVE_DIR}/render_$(date '+%Y-%m-%d_%H%M%S').mp4"
+    OUTPUT="${RENDERS_DIR}/render_$(date '+%Y-%m-%d_%H%M%S').mp4"
 fi
 
 # --- Frame lista ---

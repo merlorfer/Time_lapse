@@ -72,7 +72,7 @@ log "Deleted ${DELETED} frames from ramdisk"
 log "Rebuilding master.mp4 from archive..."
 
 MASTER_LIST=$(mktemp)
-ls "${ARCHIVE_DIR}/"*.mp4 2>/dev/null | sort | while IFS= read -r f; do
+ls "${ARCHIVE_DIR}/"[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].mp4 2>/dev/null | sort | while IFS= read -r f; do
     echo "file '$f'"
 done > "$MASTER_LIST"
 

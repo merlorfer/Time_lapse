@@ -47,6 +47,54 @@ def build_args(script: str, params: dict) -> list[str]:
             args += ["--output", params["output"]]
     return args
 
+# ── Video base helper ────────────────────────────────────────────────────────
+def get_video_base() -> str:
+    r = subprocess.run(
+        ["bash", "-c",
+         "source /home/orangepi/timelapse/scripts/config.sh; "
+         "[ -f /tmp/timelapse_session.conf ] && source /tmp/timelapse_session.conf; "
+         "echo $VIDEO_BASE"],
+        capture_output=True, text=True
+    )
+    return r.stdout.strip() or "/home/orangepi/timelapse/videos"
+
+def get_videos() -> dict:
+    video_base   = get_video_base()
+    archive_dir  = os.path.join(video_base, "archive")
+    renders_dir  = os.path.join(video_base, "renders")
+
+    def list_dir(directory: str, pattern: str) -> list:
+        videos = []
+        if not os.path.isdir(directory):
+            return videos
+        for name in sorted(glob.glob(os.path.join(directory, pattern)), reverse=True):
+            try:
+                st = os.stat(name)
+                videos.append({
+                    "name":  os.path.basename(name),
+                    "size":  st.st_size,
+                    "mtime": int(st.st_mtime),
+                })
+            except Exception:
+                pass
+        return videos
+
+    # master.mp4 külön
+    master = None
+    master_path = os.path.join(video_base, "master.mp4")
+    if os.path.isfile(master_path):
+        try:
+            st = os.stat(master_path)
+            master = {"name": "master.mp4", "size": st.st_size, "mtime": int(st.st_mtime)}
+        except Exception:
+            pass
+
+    return {
+        "archive": list_dir(archive_dir, "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].mp4"),
+        "renders": list_dir(renders_dir, "*.mp4"),
+        "master":  master,
+    }
+
 # ── Status helper ────────────────────────────────────────────────────────────
 def get_status() -> dict:
     # Timelapse active?
@@ -119,6 +167,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._serve_static("index.html", "text/html; charset=utf-8")
         elif path == "/api/status":
             self._send_json(get_status())
+        elif path == "/api/videos":
+            self._send_json(get_videos())
         elif path == "/api/logs":
             qs       = parse_qs(parsed.query)
             log_type = qs.get("type", ["capture"])[0]
