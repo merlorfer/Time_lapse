@@ -1,0 +1,15 @@
+[Unit]
+Description=Timelapse HTTP File Server
+After=network.target
+
+[Service]
+Type=simple
+User=orangepi
+ExecStart=/bin/bash -c 'if mountpoint -q /mnt/timelapse; then cd /mnt/timelapse; else mkdir -p /home/orangepi/timelapse/videos && cd /home/orangepi/timelapse/videos; fi && exec python3 -m http.server 8080 --bind 0.0.0.0'
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
