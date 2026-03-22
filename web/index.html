@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Timelapse Vezérlő</title>
+<style>
+:root {
+  --bg:      #0f172a;
+  --card:    #1e293b;
+  --border:  #334155;
+  --text:    #e2e8f0;
+  --muted:   #94a3b8;
+  --green:   #4ade80;
+  --red:     #f87171;
+  --yellow:  #fbbf24;
+  --blue:    #60a5fa;
+  --accent:  #3b82f6;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; }
+
+/* ── Layout ── */
+header { background: var(--card); border-bottom: 1px solid var(--border); padding: 14px 20px; display: flex; align-items: center; gap: 12px; }
+header h1 { font-size: 18px; font-weight: 600; }
+header .sub { color: var(--muted); font-size: 12px; }
+main { max-width: 1100px; margin: 0 auto; padding: 20px; display: flex; flex-direction: column; gap: 20px; }
+
+/* ── Cards ── */
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.card-title { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 12px; }
+
+/* ── Status grid ── */
+.status-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.stat { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; margin-bottom: 6px; }
+.stat-value { font-size: 20px; font-weight: 700; }
+.stat-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.dot.green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.dot.red   { background: var(--red); }
+.dot.yellow{ background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
+
+/* ── Preview ── */
+.preview-wrap { position: relative; background: #000; border-radius: 8px; overflow: hidden; aspect-ratio: 4/3; max-height: 360px; display: flex; align-items: center; justify-content: center; }
+.preview-wrap img { width: 100%; height: 100%; object-fit: contain; }
+.preview-off { color: var(--muted); font-size: 13px; text-align: center; }
+.preview-off span { font-size: 32px; display: block; margin-bottom: 8px; }
+
+/* ── Buttons ── */
+.btn-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+button { cursor: pointer; border: none; border-radius: 7px; padding: 9px 18px; font-size: 13px; font-weight: 500; transition: opacity .15s, transform .1s; }
+button:hover  { opacity: .85; }
+button:active { transform: scale(.97); }
+button:disabled { opacity: .35; cursor: not-allowed; }
+.btn-green  { background: #166534; color: var(--green); border: 1px solid #15803d; }
+.btn-red    { background: #7f1d1d; color: var(--red);   border: 1px solid #991b1b; }
+.btn-blue   { background: #1e3a5f; color: var(--blue);  border: 1px solid #1d4ed8; }
+.btn-yellow { background: #78350f; color: var(--yellow); border: 1px solid #b45309; }
+.btn-gray   { background: #1e293b; color: var(--text);  border: 1px solid var(--border); }
+
+/* ── Output console ── */
+.console { background: #0a0f1e; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 12px; min-height: 80px; max-height: 220px; overflow-y: auto; white-space: pre-wrap; color: #a3e635; }
+.console.err { color: var(--red); }
+.console-empty { color: var(--muted); font-style: italic; }
+
+/* ── Log viewer ── */
+.log-controls { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+.log-controls select, .log-controls input { background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 5px 10px; font-size: 13px; }
+.log-box { background: #0a0f1e; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 11px; height: 280px; overflow-y: auto; white-space: pre-wrap; }
+.log-line { line-height: 1.5; }
+.log-line.error { color: var(--red); }
+.log-line.warn  { color: var(--yellow); }
+.log-line.ok    { color: var(--green); }
+.log-line.info  { color: var(--muted); }
+
+/* ── Modal ── */
+.overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 100; align-items: center; justify-content: center; }
+.overlay.open { display: flex; }
+.modal { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; width: 420px; max-width: 95vw; }
+.modal h2 { font-size: 16px; margin-bottom: 18px; }
+.form-row { margin-bottom: 14px; }
+.form-row label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+.form-row input, .form-row select { width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+.form-row .hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.modal-btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+
+/* ── Spinner ── */
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,.2); border-top-color: #fff; border-radius: 50%; animation: spin .6s linear infinite; vertical-align: middle; margin-right: 6px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 640px) { .two-col { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>🎥 Timelapse Vezérlő</h1>
+    <div class="sub" id="last-refresh">Frissítés...</div>
+  </div>
+</header>
+
+<main>
+
+  <!-- Status cards -->
+  <div class="status-grid">
+    <div class="stat">
+      <div class="stat-label">Timelapse</div>
+      <div class="stat-value" id="tl-status"><span class="dot red"></span>Inaktív</div>
+      <div class="stat-sub" id="tl-started"></div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Preview</div>
+      <div class="stat-value" id="pv-status"><span class="dot red"></span>Kikapcsolva</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Rögzített képek</div>
+      <div class="stat-value" id="frame-count">–</div>
+      <div class="stat-sub">ramdisken</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">SD kártya</div>
+      <div class="stat-value" id="disk-sd">–</div>
+      <div class="stat-sub" id="disk-sd-sub"></div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">USB pendrive</div>
+      <div class="stat-value" id="disk-usb">–</div>
+      <div class="stat-sub" id="disk-usb-sub"></div>
+    </div>
+  </div>
+
+  <!-- Two-column: preview + controls -->
+  <div class="two-col">
+
+    <!-- Camera preview -->
+    <div class="card">
+      <div class="card-title">Kamera preview</div>
+      <div class="preview-wrap" id="preview-wrap">
+        <div class="preview-off" id="preview-off">
+          <span>📷</span>Preview nem aktív
+        </div>
+        <img id="preview-img" style="display:none" alt="preview">
+      </div>
+    </div>
+
+    <!-- Controls -->
+    <div class="card">
+      <div class="card-title">Vezérlés</div>
+      <div style="margin-bottom:14px">
+        <div class="card-title" style="margin-bottom:8px">Timelapse rögzítés</div>
+        <div class="btn-grid">
+          <button class="btn-green" onclick="openModal('start-modal')">▶ Indítás</button>
+          <button class="btn-red"   onclick="runScript('stop_timelapse')">■ Leállítás</button>
+        </div>
+      </div>
+      <div style="margin-bottom:14px">
+        <div class="card-title" style="margin-bottom:8px">Preview stream (:8081)</div>
+        <div class="btn-grid">
+          <button class="btn-blue" onclick="runScript('preview_start')">▶ Preview indítás</button>
+          <button class="btn-red"  onclick="runScript('preview_stop')">■ Preview leállítás</button>
+        </div>
+      </div>
+      <div style="margin-bottom:14px">
+        <div class="card-title" style="margin-bottom:8px">Videó</div>
+        <div class="btn-grid">
+          <button class="btn-yellow" onclick="openModal('render-modal')">🎬 Render most</button>
+          <button class="btn-gray"   onclick="runScript('compile_daily')">📅 Napi compile</button>
+        </div>
+      </div>
+      <div>
+        <div class="card-title" style="margin-bottom:8px">Teszt</div>
+        <div class="btn-grid">
+          <button class="btn-gray" onclick="runScript('test_capture')">📷 Test capture</button>
+          <button class="btn-gray" onclick="runScript('test_compile')">🎞 Test compile</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Output console -->
+  <div class="card">
+    <div class="card-title">Parancs kimenet</div>
+    <div class="console" id="output"><span class="console-empty">Futtass egy parancsot...</span></div>
+  </div>
+
+  <!-- Log viewer -->
+  <div class="card">
+    <div class="card-title">Logok</div>
+    <div class="log-controls">
+      <select id="log-type" onchange="loadLog()">
+        <option value="capture">capture.log</option>
+        <option value="compile">compile.log</option>
+      </select>
+      <input type="number" id="log-lines" value="100" min="10" max="500" style="width:80px" onchange="loadLog()">
+      <span style="color:var(--muted);font-size:12px">sor</span>
+      <button class="btn-gray" onclick="loadLog()">↻ Frissítés</button>
+      <button class="btn-gray" onclick="toggleAutoLog()" id="auto-log-btn">⏱ Auto OFF</button>
+    </div>
+    <div class="log-box" id="log-box"><span style="color:var(--muted)">Betöltés...</span></div>
+  </div>
+
+</main>
+
+<!-- Modal: Start Timelapse -->
+<div class="overlay" id="start-modal">
+  <div class="modal">
+    <h2>▶ Timelapse indítása</h2>
+    <div class="form-row">
+      <label>Kezdés időpontja</label>
+      <input type="time" id="p-start" value="06:00">
+    </div>
+    <div class="form-row">
+      <label>Befejezés időpontja</label>
+      <input type="time" id="p-end" value="20:00">
+    </div>
+    <div class="form-row">
+      <label>Intervallum (másodperc)</label>
+      <input type="number" id="p-interval" value="60" min="5" max="3600">
+      <div class="hint">Képek közötti szünet</div>
+    </div>
+    <div class="form-row">
+      <label>Tárhely (opcionális)</label>
+      <select id="p-storage">
+        <option value="">Automatikus (USB → SD)</option>
+        <option value="/mnt/timelapse">USB pendrive (/mnt/timelapse)</option>
+        <option value="/home/orangepi/timelapse/videos">SD kártya</option>
+      </select>
+    </div>
+    <div class="modal-btns">
+      <button class="btn-gray" onclick="closeModal('start-modal')">Mégse</button>
+      <button class="btn-green" onclick="submitStart()">▶ Indítás</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Render Now -->
+<div class="overlay" id="render-modal">
+  <div class="modal">
+    <h2>🎬 Render most</h2>
+    <div class="form-row">
+      <label>Kimeneti fájl (opcionális)</label>
+      <input type="text" id="p-output" placeholder="pl. /mnt/timelapse/archive/sajat.mp4">
+      <div class="hint">Üresen hagyva automatikus nevet kap az archívban</div>
+    </div>
+    <div class="modal-btns">
+      <button class="btn-gray" onclick="closeModal('render-modal')">Mégse</button>
+      <button class="btn-yellow" onclick="submitRender()">🎬 Render</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ───────────────────────────────────────────────────────────────────
+let statusInterval = null;
+let logInterval    = null;
+let autoLog        = false;
+let running        = false;
+
+// ── Init ────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  refreshStatus();
+  loadLog();
+  statusInterval = setInterval(refreshStatus, 5000);
+});
+
+// ── Status ──────────────────────────────────────────────────────────────────
+async function refreshStatus() {
+  try {
+    const s = await api('/api/status');
+
+    // Timelapse
+    const tlEl = document.getElementById('tl-status');
+    if (s.timelapse_active) {
+      tlEl.innerHTML = '<span class="dot green"></span>Aktív';
+    } else {
+      tlEl.innerHTML = '<span class="dot red"></span>Inaktív';
+    }
+    document.getElementById('tl-started').textContent =
+      s.started_at ? 'Indítva: ' + s.started_at : '';
+
+    // Preview
+    const pvEl = document.getElementById('pv-status');
+    const imgEl = document.getElementById('preview-img');
+    const offEl = document.getElementById('preview-off');
+    if (s.preview_active) {
+      pvEl.innerHTML = '<span class="dot green"></span>Él';
+      const host = location.hostname;
+      const src  = `http://${host}:8081/stream`;
+      if (imgEl.src !== src) imgEl.src = src;
+      imgEl.style.display = 'block';
+      offEl.style.display  = 'none';
+    } else {
+      pvEl.innerHTML = '<span class="dot red"></span>Kikapcsolva';
+      imgEl.style.display = 'none';
+      offEl.style.display  = 'flex';
+      imgEl.src = '';
+    }
+
+    // Frames
+    document.getElementById('frame-count').textContent = s.frame_count;
+
+    // SD disk
+    if (s.disk_sd && s.disk_sd.free) {
+      document.getElementById('disk-sd').textContent = s.disk_sd.free + ' szabad';
+      document.getElementById('disk-sd-sub').textContent =
+        `${s.disk_sd.used} / ${s.disk_sd.total} (${s.disk_sd.pct})`;
+    }
+
+    // USB disk
+    if (s.usb_ok && s.disk_usb && s.disk_usb.free) {
+      document.getElementById('disk-usb').innerHTML =
+        '<span class="dot green"></span>' + s.disk_usb.free + ' szabad';
+      document.getElementById('disk-usb-sub').textContent =
+        `${s.disk_usb.used} / ${s.disk_usb.total} (${s.disk_usb.pct})`;
+    } else {
+      document.getElementById('disk-usb').innerHTML =
+        '<span class="dot red"></span>Nincs csatlakoztatva';
+      document.getElementById('disk-usb-sub').textContent = '';
+    }
+
+    document.getElementById('last-refresh').textContent =
+      'Utolsó frissítés: ' + new Date().toLocaleTimeString('hu-HU');
+
+  } catch (e) {
+    document.getElementById('last-refresh').textContent = 'Kapcsolódási hiba';
+  }
+}
+
+// ── Script runner ────────────────────────────────────────────────────────────
+async function runScript(script, params = {}) {
+  if (running) return;
+  setOutput('<span class="spinner"></span>Futás: ' + script + '…', false);
+  running = true;
+  try {
+    const res = await api('/api/run', 'POST', { script, params });
+    setOutput(res.output || '(nincs kimenet)', !res.ok);
+    refreshStatus();
+  } catch (e) {
+    setOutput('Hálózati hiba: ' + e.message, true);
+  } finally {
+    running = false;
+  }
+}
+
+function setOutput(html, isError) {
+  const el = document.getElementById('output');
+  el.className = 'console' + (isError ? ' err' : '');
+  el.innerHTML = html;
+}
+
+// ── Modals ───────────────────────────────────────────────────────────────────
+function openModal(id) {
+  document.getElementById(id).classList.add('open');
+}
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+}
+document.addEventListener('click', e => {
+  if (e.target.classList.contains('overlay')) {
+    e.target.classList.remove('open');
+  }
+});
+
+function submitStart() {
+  closeModal('start-modal');
+  runScript('start_timelapse', {
+    start:    document.getElementById('p-start').value,
+    end:      document.getElementById('p-end').value,
+    interval: document.getElementById('p-interval').value,
+    storage:  document.getElementById('p-storage').value,
+  });
+}
+
+function submitRender() {
+  closeModal('render-modal');
+  runScript('render_now', {
+    output: document.getElementById('p-output').value,
+  });
+}
+
+// ── Log viewer ───────────────────────────────────────────────────────────────
+async function loadLog() {
+  const type  = document.getElementById('log-type').value;
+  const lines = document.getElementById('log-lines').value;
+  const box   = document.getElementById('log-box');
+  try {
+    const data = await api(`/api/logs?type=${type}&lines=${lines}`);
+    if (!data.lines || data.lines.length === 0) {
+      box.innerHTML = '<span style="color:var(--muted)">Nincs log bejegyzés.</span>';
+      return;
+    }
+    box.innerHTML = data.lines.map(line => {
+      let cls = '';
+      if (/ERROR|FAIL|sikertelen/i.test(line)) cls = 'error';
+      else if (/WARNING|WARN/i.test(line))      cls = 'warn';
+      else if (/OK|Kész|success|Captured/i.test(line)) cls = 'ok';
+      else cls = 'info';
+      return `<div class="log-line ${cls}">${escHtml(line)}</div>`;
+    }).join('');
+    box.scrollTop = box.scrollHeight;
+  } catch (e) {
+    box.innerHTML = '<span style="color:var(--red)">Hiba a log betöltésekor.</span>';
+  }
+}
+
+function toggleAutoLog() {
+  autoLog = !autoLog;
+  const btn = document.getElementById('auto-log-btn');
+  if (autoLog) {
+    btn.textContent = '⏱ Auto ON';
+    btn.className   = 'btn-green';
+    logInterval = setInterval(loadLog, 5000);
+  } else {
+    btn.textContent = '⏱ Auto OFF';
+    btn.className   = 'btn-gray';
+    clearInterval(logInterval);
+  }
+}
+
+// ── Utilities ────────────────────────────────────────────────────────────────
+async function api(url, method = 'GET', body = null) {
+  const opts = { method, headers: {} };
+  if (body) {
+    opts.body = JSON.stringify(body);
+    opts.headers['Content-Type'] = 'application/json';
+  }
+  const r = await fetch(url, opts);
+  return r.json();
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>

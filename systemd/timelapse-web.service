@@ -1,0 +1,16 @@
+[Unit]
+Description=Timelapse Web UI
+After=network.target
+
+[Service]
+Type=simple
+User=orangepi
+WorkingDirectory=/home/orangepi/timelapse/web
+ExecStart=/usr/bin/python3 /home/orangepi/timelapse/web/app.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
