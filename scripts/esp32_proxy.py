@@ -23,7 +23,7 @@ from bleak import BleakClient, BleakScanner
 BLE_DEVICE_NAME = "ESP32C6_Gateway"
 BLE_REQ_UUID    = "0000fff1-0000-1000-8000-00805f9b34fb"   # CMD_REQ (Write)
 BLE_RES_UUID    = "0000fff2-0000-1000-8000-00805f9b34fb"   # CMD_RES (Notify)
-WEB_DIR         = "/home/orangepi/esp32/web"
+WEB_DIR         = "/home/orangepi/esp32/web"   # proxy-specific web files (index.html + proxy-patch.js + CLCode01/web/* copies)
 HTTP_PORT       = 8083
 
 # =============================================================================
@@ -159,6 +159,10 @@ def ble_call(cmd: str, params: dict) -> dict:
 
 def endpoint_to_cmd(method: str, path: str, body: dict):
     """Returns (cmd, params) tuple or (None, None) if unknown."""
+
+    if path == "/api/ble-status":
+        # Internal proxy endpoint – handled before reaching here
+        return None, None
 
     if path == "/api/status":
         return "get_status", {}
@@ -319,7 +323,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if self.path.startswith("/api/"):
+        if self.path == "/api/ble-status":
+            self._send_json(200, {"connected": connected})
+        elif self.path.startswith("/api/"):
             self._handle_api()
         else:
             self._serve_static()
