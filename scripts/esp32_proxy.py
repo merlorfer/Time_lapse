@@ -153,42 +153,50 @@ async def _send(cmd: str, params: dict) -> dict:
         raise
 
 
-async def _reconnect_loop():
-    """Background coroutine: keep BLE connection alive."""
-    global _client, _lock, connected
-
+async def _ble_init():
+    """One-shot coroutine: just initialise the lock and signal ready."""
+    global _lock
     _lock = asyncio.Lock()
-    _ready.set()                # signal HTTP server it may start
+    _ready.set()
 
-    while True:
-        if not connected:
-            try:
-                print(f"[BLE] Scanning for {BLE_DEVICE_NAME}…")
-                dev = await BleakScanner.find_device_by_name(BLE_DEVICE_NAME, timeout=10.0)
-                if dev is None:
-                    raise ConnectionError("Device not found")
-                _client = BleakClient(dev, disconnected_callback=_on_disc)
-                await _client.connect()
-                connected = True
-                print(f"[BLE] Connected: {dev.address}")
-            except Exception as exc:
-                print(f"[BLE] {exc} – retrying in 5 s")
-                await asyncio.sleep(5)
-        else:
-            await asyncio.sleep(2)
+
+async def ble_connect_async():
+    """Connect to ESP32C6_Gateway (called from HTTP handler via run_coroutine_threadsafe)."""
+    global _client, connected
+    if connected and _client and _client.is_connected:
+        return {"ok": True, "msg": "Already connected"}
+    print(f"[BLE] Scanning for {BLE_DEVICE_NAME}…")
+    dev = await BleakScanner.find_device_by_name(BLE_DEVICE_NAME, timeout=10.0)
+    if dev is None:
+        raise ConnectionError("Device not found")
+    _client = BleakClient(dev, disconnected_callback=_on_disc)
+    await _client.connect()
+    connected = True
+    print(f"[BLE] Connected: {dev.address}")
+    return {"ok": True, "address": dev.address}
+
+
+async def ble_disconnect_async():
+    """Disconnect from ESP32C6_Gateway."""
+    global connected
+    if _client and _client.is_connected:
+        await _client.disconnect()
+    connected = False
+    print("[BLE] Disconnected by user")
+    return {"ok": True}
 
 
 def _on_disc(_c):
     global connected
     connected = False
-    print("[BLE] Disconnected – will reconnect")
+    print("[BLE] Disconnected")
 
 
 def _start_ble_thread():
     global _loop
     _loop = asyncio.new_event_loop()
     asyncio.set_event_loop(_loop)
-    _loop.create_task(_reconnect_loop())
+    _loop.create_task(_ble_init())
     _loop.run_forever()
 
 
@@ -372,6 +380,27 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
+    def do_POST(self):
+        if self.path == "/api/ble-connect":
+            try:
+                result = asyncio.run_coroutine_threadsafe(
+                    ble_connect_async(), _loop).result(timeout=15)
+                self._send_json(200, result)
+            except Exception as exc:
+                self._send_json(503, {"ok": False, "msg": str(exc)})
+        elif self.path == "/api/ble-disconnect":
+            try:
+                result = asyncio.run_coroutine_threadsafe(
+                    ble_disconnect_async(), _loop).result(timeout=5)
+                self._send_json(200, result)
+            except Exception as exc:
+                self._send_json(500, {"ok": False, "msg": str(exc)})
+        elif self.path.startswith("/api/"):
+            self._handle_api()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
     def do_GET(self):
         if self.path == "/api/ble-status":
             self._send_json(200, {"connected": connected})
@@ -391,13 +420,6 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_api()
         else:
             self._serve_static()
-
-    def do_POST(self):
-        if self.path.startswith("/api/"):
-            self._handle_api()
-        else:
-            self.send_response(404)
-            self.end_headers()
 
     def do_DELETE(self):
         if self.path.startswith("/api/"):

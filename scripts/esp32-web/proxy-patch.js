@@ -27,7 +27,100 @@
 
     window.disconnectBLE = function () {};
 
-    // ── 3. Poll /api/ble-status ───────────────────────────────────────────────
+    // ── 3. BLE connect / disconnect (manual) ─────────────────────────────────
+
+    let _bleConnecting = false;
+
+    async function proxyBleConnect() {
+        if (_bleConnecting) return;
+        _bleConnecting = true;
+        _setBleButtonState('connecting');
+        try {
+            const r = await fetch('/api/ble-connect', { method: 'POST' });
+            const d = await r.json();
+            if (!d.ok) throw new Error(d.msg || 'Hiba');
+        } catch (e) {
+            if (typeof showToast === 'function') showToast('BLE csatlakozás sikertelen: ' + e.message, true);
+        } finally {
+            _bleConnecting = false;
+            await updateProxyStatus();
+        }
+    }
+
+    async function proxyBleDisconnect() {
+        try {
+            await fetch('/api/ble-disconnect', { method: 'POST' });
+        } catch (_) {}
+        await updateProxyStatus();
+    }
+
+    function _setBleButtonState(state) {
+        // state: 'connected' | 'disconnected' | 'connecting'
+        const connectBtn    = document.getElementById('proxy-ble-connect-btn');
+        const disconnectBtn = document.getElementById('proxy-ble-disconnect-btn');
+        const dot           = document.getElementById('proxy-ble-dot');
+        const label         = document.getElementById('proxy-ble-label');
+
+        if (!connectBtn) return;
+
+        if (state === 'connected') {
+            connectBtn.style.display    = 'none';
+            disconnectBtn.style.display = '';
+            if (dot)   dot.style.background  = '#a6e3a1';
+            if (label) label.textContent     = 'ESP32 csatlakozva';
+        } else if (state === 'connecting') {
+            connectBtn.disabled = true;
+            connectBtn.textContent = 'Csatlakozás…';
+            if (dot)   dot.style.background  = '#fab387';
+            if (label) label.textContent     = 'Csatlakozás…';
+        } else {
+            connectBtn.style.display    = '';
+            connectBtn.disabled         = false;
+            connectBtn.textContent      = 'BLE csatlakozás';
+            disconnectBtn.style.display = 'none';
+            if (dot)   dot.style.background  = '#f38ba8';
+            if (label) label.textContent     = 'ESP32 nincs csatlakozva';
+        }
+    }
+
+    function injectBleButtons() {
+        const actions = document.querySelector('.ble-actions');
+        if (!actions) return;
+
+        // Hide original BLE buttons
+        ['ble-connect-btn', 'modal-ble-connect-btn', 'sticky-ble-connect-btn',
+         'ble-disconnect-btn', 'modal-ble-disconnect-btn', 'sticky-ble-disconnect-btn'
+        ].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'none';
+        });
+
+        // Status dot + label
+        const status = document.createElement('span');
+        status.style.cssText = 'display:flex;align-items:center;gap:5px;font-size:12px;color:#cdd6f4;';
+        status.innerHTML =
+            '<span id="proxy-ble-dot" style="width:7px;height:7px;border-radius:50%;background:#f38ba8;display:inline-block;flex-shrink:0;"></span>' +
+            '<span id="proxy-ble-label">ESP32 nincs csatlakozva</span>';
+
+        const connectBtn = document.createElement('button');
+        connectBtn.id = 'proxy-ble-connect-btn';
+        connectBtn.className = 'btn btn-primary btn-small';
+        connectBtn.textContent = 'BLE csatlakozás';
+        connectBtn.addEventListener('click', proxyBleConnect);
+
+        const disconnectBtn = document.createElement('button');
+        disconnectBtn.id = 'proxy-ble-disconnect-btn';
+        disconnectBtn.className = 'btn btn-secondary btn-small';
+        disconnectBtn.textContent = 'BLE leválasztás';
+        disconnectBtn.style.display = 'none';
+        disconnectBtn.addEventListener('click', proxyBleDisconnect);
+
+        actions.appendChild(status);
+        actions.appendChild(connectBtn);
+        actions.appendChild(disconnectBtn);
+    }
+
+    // ── 4. Poll /api/ble-status ───────────────────────────────────────────────
 
     async function updateProxyStatus() {
         let bleOk = false;
@@ -36,34 +129,14 @@
             if (r.ok) bleOk = (await r.json()).connected === true;
         } catch (_) {}
 
-        const label = bleOk ? 'ESP32 csatlakozva (BLE)' : 'ESP32 nincs csatlakozva';
-        const cls   = bleOk ? 'connected' : 'disconnected';
-
-        ['ble-connect-btn', 'modal-ble-connect-btn', 'sticky-ble-connect-btn'].forEach(id => {
-            const el = document.getElementById(id);
-            if (!el) return;
-            el.textContent = label;
-            el.disabled = true;
-            el.style.cursor = 'default';
-        });
-
-        ['ble-status', 'modal-ble-status', 'sticky-ble-status'].forEach(id => {
-            const el = document.getElementById(id);
-            if (!el) return;
-            const dot = el.querySelector('.status-dot');
-            if (dot) dot.className = 'status-dot ' + cls;
-            const txt = el.querySelector('.status-text');
-            if (txt) txt.textContent = label;
-        });
-
-        if (typeof updateBLEStatus === 'function') updateBLEStatus(bleOk, label);
+        _setBleButtonState(bleOk ? 'connected' : 'disconnected');
 
         // Also update the serial-log button dot
         const dot = document.getElementById('serial-btn-dot');
         if (dot) dot.style.background = _serialAvailable ? '#a6e3a1' : '#f38ba8';
     }
 
-    // ── 4. Serial log drawer ──────────────────────────────────────────────────
+    // ── 5. Serial log drawer ──────────────────────────────────────────────────
 
     let _serialSince    = 0;
     let _serialPaused   = false;
@@ -188,20 +261,15 @@
         } catch (_) {}
     }
 
-    // ── 5. Boot ───────────────────────────────────────────────────────────────
+    // ── 6. Boot ───────────────────────────────────────────────────────────────
 
     document.addEventListener('DOMContentLoaded', function () {
+        injectBleButtons();
         injectSerialButton();
         injectSerialDrawer();
         updateProxyStatus();
         setInterval(updateProxyStatus, 5000);
         setInterval(pollSerialLogs, 2000);
-
-        // Hide BLE-only disconnect buttons
-        ['ble-disconnect-btn', 'modal-ble-disconnect-btn', 'sticky-ble-disconnect-btn'].forEach(id => {
-            const el = document.getElementById(id);
-            if (el) el.style.display = 'none';
-        });
     });
 
 })();
