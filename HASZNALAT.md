@@ -146,6 +146,33 @@ sudo rm /etc/systemd/system/esp32-proxy.service
 sudo systemctl daemon-reload
 ```
 
+### ESP32 proxy weboldalak frissítése
+
+A proxy a `CLCode01/web/` fájljainak módosított másolatát szolgálja ki (`scripts/esp32-web/`).
+Ha az ESP32 firmware webes felülete megváltozik, a proxy fájljait szinkronizálni kell.
+
+**Automatikusan** (Time_lapse projekt gyökeréből futtatva):
+```bash
+./scripts/sync_proxy_web.sh
+```
+
+A script elvégzi:
+1. Változatlan fájlok (`ble-service.js`, `style.css`, stb.) egyszerű másolása
+2. `script.js`: másolás + `let bleConnected` / `let zigbeeActive` → `var` csere
+   *(szükséges, hogy a proxy beállíthassa ezeket a változókat)*
+3. `index.html`: másolás + `<script src="proxy-patch.js">` sor visszarakása
+
+Majd deploy az Orange Pi-ra (a script a végén kiírja a pontos parancsokat):
+```bash
+pscp -pw orangepi scripts/esp32-web/*.js   orangepi@100.68.70.151:/home/orangepi/esp32/web/
+pscp -pw orangepi scripts/esp32-web/*.css  orangepi@100.68.70.151:/home/orangepi/esp32/web/
+pscp -pw orangepi scripts/esp32-web/*.html orangepi@100.68.70.151:/home/orangepi/esp32/web/
+pscp -pw orangepi scripts/esp32-web/*.png  orangepi@100.68.70.151:/home/orangepi/esp32/web/
+plink -pw orangepi -batch orangepi@100.68.70.151 "echo orangepi | sudo -S systemctl restart esp32-proxy"
+```
+
+**A `proxy-patch.js` fájlt soha nem kell szinkronizálni** – az csak a proxy saját logikáját tartalmazza, nincs megfelelője a CLCode01 projektben.
+
 ---
 
 ## Azonnali renderelés (meglévő képekből)
