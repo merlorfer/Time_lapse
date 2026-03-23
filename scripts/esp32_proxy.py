@@ -11,6 +11,7 @@ import collections
 import json
 import os
 import re
+import signal
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -42,16 +43,18 @@ _serial_available = False
 
 def _serial_reader_thread():
     global _serial_available
+    import subprocess
     while True:
         try:
-            # Use raw open() — works without pyserial on Linux ttyACM devices
-            import subprocess, select
-            proc = subprocess.Popen(
+            # O_NOCTTY: don't let the tty become our controlling terminal
+            # (prevents SIGHUP when the device disconnects)
+            fd = os.open(SERIAL_PORT, os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK)
+            os.set_blocking(fd, True)
+            subprocess.run(
                 ["stty", "-F", SERIAL_PORT, str(SERIAL_BAUD), "raw", "-echo"],
                 stderr=subprocess.DEVNULL
             )
-            proc.wait()
-            with open(SERIAL_PORT, "rb", buffering=0) as f:
+            with os.fdopen(fd, "rb", buffering=0) as f:
                 _serial_available = True
                 print(f"[SERIAL] Reading from {SERIAL_PORT} @ {SERIAL_BAUD} baud")
                 buf = b""
@@ -434,6 +437,9 @@ class Handler(BaseHTTPRequestHandler):
 # =============================================================================
 
 if __name__ == "__main__":
+    # Ignore SIGHUP so serial port disconnects don't kill the process
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+
     threading.Thread(target=_start_ble_thread, daemon=True).start()
     threading.Thread(target=_serial_reader_thread, daemon=True).start()
     _ready.wait()   # block until BLE lock is initialised (loop is running)
