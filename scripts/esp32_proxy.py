@@ -7,12 +7,14 @@ Requires: pip3 install bleak
 """
 
 import asyncio
+import collections
 import json
 import os
 import re
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 from bleak import BleakClient, BleakScanner
 
@@ -20,11 +22,59 @@ from bleak import BleakClient, BleakScanner
 # Configuration
 # =============================================================================
 
-BLE_DEVICE_NAME = "ESP32C6_Gateway"
-BLE_REQ_UUID    = "0000fff1-0000-1000-8000-00805f9b34fb"   # CMD_REQ (Write)
-BLE_RES_UUID    = "0000fff2-0000-1000-8000-00805f9b34fb"   # CMD_RES (Notify)
-WEB_DIR         = "/home/orangepi/esp32/web"   # proxy-specific web files (index.html + proxy-patch.js + CLCode01/web/* copies)
-HTTP_PORT       = 8083
+BLE_DEVICE_NAME  = "ESP32C6_Gateway"
+BLE_REQ_UUID     = "0000fff1-0000-1000-8000-00805f9b34fb"   # CMD_REQ (Write)
+BLE_RES_UUID     = "0000fff2-0000-1000-8000-00805f9b34fb"   # CMD_RES (Notify)
+WEB_DIR          = "/home/orangepi/esp32/web"
+HTTP_PORT        = 8083
+SERIAL_PORT      = "/dev/ttyACM0"
+SERIAL_BAUD      = 115200
+SERIAL_BUF_LINES = 500   # ring buffer size
+
+# =============================================================================
+# Serial log reader  (background thread, no pyserial dependency)
+# =============================================================================
+
+_serial_buf: collections.deque = collections.deque(maxlen=SERIAL_BUF_LINES)
+_serial_lock = threading.Lock()
+_serial_available = False
+
+
+def _serial_reader_thread():
+    global _serial_available
+    while True:
+        try:
+            # Use raw open() — works without pyserial on Linux ttyACM devices
+            import subprocess, select
+            proc = subprocess.Popen(
+                ["stty", "-F", SERIAL_PORT, str(SERIAL_BAUD), "raw", "-echo"],
+                stderr=subprocess.DEVNULL
+            )
+            proc.wait()
+            with open(SERIAL_PORT, "rb", buffering=0) as f:
+                _serial_available = True
+                print(f"[SERIAL] Reading from {SERIAL_PORT} @ {SERIAL_BAUD} baud")
+                buf = b""
+                while True:
+                    chunk = f.read(256)
+                    if not chunk:
+                        break
+                    buf += chunk
+                    while b"\n" in buf:
+                        line, buf = buf.split(b"\n", 1)
+                        text = line.replace(b"\r", b"").decode("utf-8", errors="replace").strip()
+                        if text:
+                            entry = {"t": time.strftime("%H:%M:%S"), "msg": text}
+                            with _serial_lock:
+                                _serial_buf.append(entry)
+        except FileNotFoundError:
+            _serial_available = False
+            time.sleep(5)
+        except Exception as exc:
+            _serial_available = False
+            print(f"[SERIAL] {exc} – retry in 5 s")
+            time.sleep(5)
+
 
 # =============================================================================
 # Shared async state  (all writes happen inside the BLE event loop)
@@ -325,6 +375,18 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/api/ble-status":
             self._send_json(200, {"connected": connected})
+        elif self.path.startswith("/api/serial-logs"):
+            qs = parse_qs(urlparse(self.path).query)
+            since = int(qs.get("since", [0])[0])
+            with _serial_lock:
+                lines = list(_serial_buf)
+            # 'since' = number of lines already seen by the client
+            new_lines = lines[since:]
+            self._send_json(200, {
+                "available": _serial_available,
+                "total": len(lines),
+                "lines": new_lines,
+            })
         elif self.path.startswith("/api/"):
             self._handle_api()
         else:
@@ -351,6 +413,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     threading.Thread(target=_start_ble_thread, daemon=True).start()
+    threading.Thread(target=_serial_reader_thread, daemon=True).start()
     _ready.wait()   # block until BLE lock is initialised (loop is running)
 
     print(f"[HTTP] ESP32C6 proxy on :{HTTP_PORT}")
