@@ -11,11 +11,10 @@
 (function () {
     'use strict';
 
-    // ── 1. Force HTTP-only routing, allow bleConnected for UI gating ─────────
-    //
-    // apiRequest() normally routes to bleRequest() (Web Bluetooth) when
-    // bleConnected===true. We override it here to ALWAYS use httpRequest()
-    // so the browser never touches Web Bluetooth, even when bleConnected=true.
+    // Shared proxy BLE state (used by overrides defined below)
+    let _lastBleOk = null;
+
+    // ── 1. Always route API calls via HTTP (never Web Bluetooth) ─────────────
 
     window.apiRequest = async function (endpoint, method = 'GET', body = null) {
         return await httpRequest(endpoint, method, body);
@@ -28,6 +27,40 @@
     };
 
     window.disconnectBLE = function () {};
+
+    // ── 3. Override BLE-state-dependent functions ─────────────────────────────
+    //
+    // bleConnected is a `let` in script.js scope — unreachable from here.
+    // Instead we wrap the functions that READ it, injecting the proxy state.
+
+    const _origUpdateBLEStatus    = window.updateBLEStatus;
+    const _origUpdateControlBtns  = window.updateControlButtons;
+    const _origLoadStatus         = window.loadStatus;
+
+    window.updateBLEStatus = function (connected, msg) {
+        // Always call with proxy BLE state, not the JS-internal bleConnected
+        if (_origUpdateBLEStatus) _origUpdateBLEStatus(_lastBleOk, _lastBleOk ? 'Csatlakozva' : 'Nincs csatlakozva');
+    };
+
+    window.updateControlButtons = function () {
+        const pairingBtn = document.getElementById('pairing-btn');
+        if (!pairingBtn) return;
+        // zigbeeActive is also a `let` – read it via the status data cached on window
+        const zActive = window._proxyZigbeeActive || false;
+        const canPair  = _lastBleOk && zActive;
+        pairingBtn.disabled = !canPair;
+        pairingBtn.title = canPair ? '' : (_lastBleOk ? 'Zigbee üzemmód szükséges' : 'BLE kapcsolat szükséges');
+    };
+
+    window.loadStatus = async function () {
+        await _origLoadStatus();
+        // Patch the "WiFi" text to "BLE" and fix control buttons
+        if (_lastBleOk) {
+            const st = document.getElementById('status-text');
+            if (st && st.textContent.includes('WiFi')) st.textContent = 'Csatlakozva (BLE)';
+        }
+        _patchDeviceButtons();
+    };
 
     // ── 3. BLE connect / disconnect (manual) ─────────────────────────────────
 
@@ -124,8 +157,6 @@
 
     // ── 4. Poll /api/ble-status ───────────────────────────────────────────────
 
-    let _lastBleOk = null;
-
     async function updateProxyStatus() {
         let bleOk = false;
         try {
@@ -159,7 +190,40 @@
         if (dot) dot.style.background = _serialAvailable ? '#a6e3a1' : '#f38ba8';
     }
 
-    // ── 5. Serial log drawer ──────────────────────────────────────────────────
+    // ── 5. Device card button patcher ────────────────────────────────────────
+
+    function _patchDeviceButtons() {
+        if (!_lastBleOk) return;
+        // renderOnOffCard embeds `disabled title="Csak BLE+Zigbee..."` when
+        // bleConnected===false. Remove those restrictions after render.
+        document.querySelectorAll(
+            '.device-card button[disabled], .device-card button[title*="BLE"], .device-card button[title*="Zigbee"]'
+        ).forEach(btn => {
+            btn.disabled = false;
+            btn.title = '';
+        });
+    }
+
+    // Intercept loadDevices to patch buttons after cards render
+    const _origLoadDevices = window.loadDevices;
+    window.loadDevices = async function () {
+        await _origLoadDevices();
+        _patchDeviceButtons();
+    };
+
+    // Cache zigbeeActive when loadStatus parses it (MutationObserver on rtc-status
+    // is brittle; instead we observe the pairing button title which reflects zigbeeActive)
+    const _statusObserver = new MutationObserver(function () {
+        const pairingBtn = document.getElementById('pairing-btn');
+        if (!pairingBtn) return;
+        // If pairing btn title mentions Zigbee (not BLE), zigbee IS active
+        const t = pairingBtn.title || '';
+        if (!t.includes('BLE') && !t.includes('Bluetooth')) {
+            window._proxyZigbeeActive = true;
+        }
+    });
+
+    // ── 6. Serial log drawer ──────────────────────────────────────────────────
 
     let _serialSince    = 0;
     let _serialPaused   = false;
@@ -293,6 +357,9 @@
         updateProxyStatus();
         setInterval(updateProxyStatus, 5000);
         setInterval(pollSerialLogs, 2000);
+
+        const pairingBtn = document.getElementById('pairing-btn');
+        if (pairingBtn) _statusObserver.observe(pairingBtn, { attributes: true, attributeFilter: ['title', 'disabled'] });
     });
 
 })();
