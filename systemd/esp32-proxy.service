@@ -1,5 +1,5 @@
 [Unit]
-Description=ESP32C6 BLE Proxy (HTTP :8082)
+Description=ESP32C6 BLE Proxy (HTTP :8083)
 After=network.target bluetooth.target
 Wants=bluetooth.target
 

@@ -24,7 +24,7 @@ BLE_DEVICE_NAME = "ESP32C6_Gateway"
 BLE_REQ_UUID    = "0000fff1-0000-1000-8000-00805f9b34fb"   # CMD_REQ (Write)
 BLE_RES_UUID    = "0000fff2-0000-1000-8000-00805f9b34fb"   # CMD_RES (Notify)
 WEB_DIR         = "/home/orangepi/esp32/web"
-HTTP_PORT       = 8082
+HTTP_PORT       = 8083
 
 # =============================================================================
 # Shared async state  (all writes happen inside the BLE event loop)

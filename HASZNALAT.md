@@ -117,7 +117,7 @@ sudo systemctl daemon-reload
 
 Az Orange Pi BLE-n keresztül csatlakozik az ESP32C6 Zigbee koordinátorhoz, és böngészőből elérhető webes felületet biztosít.
 
-**Elérés:** http://100.68.70.151:8082/  (NordVPN Meshnet)
+**Elérés:** http://100.68.70.151:8083/  (NordVPN Meshnet)
 
 Bootoláskor automatikusan indul. Az ESP32C6-ot **nem kell USB-n csatlakoztatni** – BLE-n keresztül kommunikál.
 
