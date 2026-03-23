@@ -11,13 +11,15 @@
 (function () {
     'use strict';
 
-    // ── 1. Force HTTP-only mode ───────────────────────────────────────────────
+    // ── 1. Force HTTP-only routing, allow bleConnected for UI gating ─────────
+    //
+    // apiRequest() normally routes to bleRequest() (Web Bluetooth) when
+    // bleConnected===true. We override it here to ALWAYS use httpRequest()
+    // so the browser never touches Web Bluetooth, even when bleConnected=true.
 
-    Object.defineProperty(window, 'bleConnected', {
-        get: () => false,
-        set: () => {},
-        configurable: false
-    });
+    window.apiRequest = async function (endpoint, method = 'GET', body = null) {
+        return await httpRequest(endpoint, method, body);
+    };
 
     // ── 2. Replace connectBLE / disconnectBLE with no-ops ────────────────────
 
@@ -122,6 +124,8 @@
 
     // ── 4. Poll /api/ble-status ───────────────────────────────────────────────
 
+    let _lastBleOk = null;
+
     async function updateProxyStatus() {
         let bleOk = false;
         try {
@@ -129,7 +133,26 @@
             if (r.ok) bleOk = (await r.json()).connected === true;
         } catch (_) {}
 
+        // Sync bleConnected so UI buttons (canControl, canPair) are enabled
+        if (window.bleConnected !== bleOk) {
+            window.bleConnected = bleOk;
+        }
+
         _setBleButtonState(bleOk ? 'connected' : 'disconnected');
+
+        // Trigger UI refresh when state changes
+        if (_lastBleOk !== bleOk) {
+            _lastBleOk = bleOk;
+            if (bleOk) {
+                // Just connected: reload status + devices so cards render enabled
+                if (typeof loadStatus   === 'function') loadStatus();
+                if (typeof loadDevices  === 'function') loadDevices();
+            } else {
+                // Just disconnected: re-render cards as disabled
+                if (typeof loadDevices  === 'function') loadDevices();
+                if (typeof updateControlButtons === 'function') updateControlButtons();
+            }
+        }
 
         // Also update the serial-log button dot
         const dot = document.getElementById('serial-btn-dot');
