@@ -114,7 +114,7 @@ async def _send(cmd: str, params: dict) -> dict:
             if len(chunks) == tot:
                 done.set()
         else:
-            chunks[1] = text
+            chunks[0] = text
             done.set()
 
     await _client.start_notify(BLE_RES_UUID, _notify)
@@ -127,8 +127,7 @@ async def _send(cmd: str, params: dict) -> dict:
         except Exception:
             pass
 
-    total = max(chunks.keys())
-    full = "".join(chunks[i] for i in range(1, total + 1))
+    full = "".join(chunks[i] for i in sorted(chunks.keys()))
 
     # Try direct parse first; if the firmware prepends {"status":"ok"} before
     # the actual payload, or BlueZ concatenates two notifications, parse each
