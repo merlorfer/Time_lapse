@@ -1,68 +1,28 @@
 /**
  * proxy-patch.js  –  Orange Pi BLE Proxy mode
  *
- * Loaded AFTER script.js. Overrides BLE-specific functions so that:
- *  - The browser never tries to use Web Bluetooth
- *  - All /api/* calls go to the Orange Pi proxy via plain HTTP (relative URLs)
- *  - The "BLE connect" button is replaced with a proxy status indicator
- *  - A serial log drawer opens via a button in the sticky header
+ * Loaded AFTER script.js (which declares bleConnected/zigbeeActive as `var`
+ * in the proxy copy, making them window properties settable from here).
+ *
+ *  - All /api/* calls go via HTTP to the Orange Pi proxy (never Web Bluetooth)
+ *  - BLE connect/disconnect buttons in sticky header control proxy BLE state
+ *  - bleConnected / zigbeeActive are synced from /api/ble-status + /api/status
+ *  - Serial log drawer accessible via "Soros log" button in sticky header
  */
 
 (function () {
     'use strict';
 
-    // Shared proxy BLE state (used by overrides defined below)
-    let _lastBleOk = null;
-
-    // ── 1. Always route API calls via HTTP (never Web Bluetooth) ─────────────
+    // ── 1. Always route via HTTP ──────────────────────────────────────────────
 
     window.apiRequest = async function (endpoint, method = 'GET', body = null) {
         return await httpRequest(endpoint, method, body);
     };
 
-    // ── 2. Replace connectBLE / disconnectBLE with no-ops ────────────────────
-
-    window.connectBLE = function () {
-        showToast('Proxy mód: az Orange Pi kezeli a BLE kapcsolatot', false);
-    };
-
+    window.connectBLE    = function () {};
     window.disconnectBLE = function () {};
 
-    // ── 3. Override BLE-state-dependent functions ─────────────────────────────
-    //
-    // bleConnected is a `let` in script.js scope — unreachable from here.
-    // Instead we wrap the functions that READ it, injecting the proxy state.
-
-    const _origUpdateBLEStatus    = window.updateBLEStatus;
-    const _origUpdateControlBtns  = window.updateControlButtons;
-    const _origLoadStatus         = window.loadStatus;
-
-    window.updateBLEStatus = function (connected, msg) {
-        // Always call with proxy BLE state, not the JS-internal bleConnected
-        if (_origUpdateBLEStatus) _origUpdateBLEStatus(_lastBleOk, _lastBleOk ? 'Csatlakozva' : 'Nincs csatlakozva');
-    };
-
-    window.updateControlButtons = function () {
-        const pairingBtn = document.getElementById('pairing-btn');
-        if (!pairingBtn) return;
-        // zigbeeActive is also a `let` – read it via the status data cached on window
-        const zActive = window._proxyZigbeeActive || false;
-        const canPair  = _lastBleOk && zActive;
-        pairingBtn.disabled = !canPair;
-        pairingBtn.title = canPair ? '' : (_lastBleOk ? 'Zigbee üzemmód szükséges' : 'BLE kapcsolat szükséges');
-    };
-
-    window.loadStatus = async function () {
-        await _origLoadStatus();
-        // Patch the "WiFi" text to "BLE" and fix control buttons
-        if (_lastBleOk) {
-            const st = document.getElementById('status-text');
-            if (st && st.textContent.includes('WiFi')) st.textContent = 'Csatlakozva (BLE)';
-        }
-        _patchDeviceButtons();
-    };
-
-    // ── 3. BLE connect / disconnect (manual) ─────────────────────────────────
+    // ── 2. BLE connect / disconnect buttons ──────────────────────────────────
 
     let _bleConnecting = false;
 
@@ -83,38 +43,33 @@
     }
 
     async function proxyBleDisconnect() {
-        try {
-            await fetch('/api/ble-disconnect', { method: 'POST' });
-        } catch (_) {}
+        try { await fetch('/api/ble-disconnect', { method: 'POST' }); } catch (_) {}
         await updateProxyStatus();
     }
 
     function _setBleButtonState(state) {
-        // state: 'connected' | 'disconnected' | 'connecting'
         const connectBtn    = document.getElementById('proxy-ble-connect-btn');
         const disconnectBtn = document.getElementById('proxy-ble-disconnect-btn');
         const dot           = document.getElementById('proxy-ble-dot');
         const label         = document.getElementById('proxy-ble-label');
-
         if (!connectBtn) return;
-
         if (state === 'connected') {
             connectBtn.style.display    = 'none';
             disconnectBtn.style.display = '';
-            if (dot)   dot.style.background  = '#a6e3a1';
-            if (label) label.textContent     = 'ESP32 csatlakozva';
+            if (dot)   dot.style.background = '#a6e3a1';
+            if (label) label.textContent    = 'ESP32 csatlakozva';
         } else if (state === 'connecting') {
-            connectBtn.disabled = true;
+            connectBtn.disabled    = true;
             connectBtn.textContent = 'Csatlakozás…';
-            if (dot)   dot.style.background  = '#fab387';
-            if (label) label.textContent     = 'Csatlakozás…';
+            if (dot)   dot.style.background = '#fab387';
+            if (label) label.textContent    = 'Csatlakozás…';
         } else {
             connectBtn.style.display    = '';
             connectBtn.disabled         = false;
             connectBtn.textContent      = 'BLE csatlakozás';
             disconnectBtn.style.display = 'none';
-            if (dot)   dot.style.background  = '#f38ba8';
-            if (label) label.textContent     = 'ESP32 nincs csatlakozva';
+            if (dot)   dot.style.background = '#f38ba8';
+            if (label) label.textContent    = 'ESP32 nincs csatlakozva';
         }
     }
 
@@ -122,15 +77,10 @@
         const actions = document.querySelector('.ble-actions');
         if (!actions) return;
 
-        // Hide original BLE buttons
         ['ble-connect-btn', 'modal-ble-connect-btn', 'sticky-ble-connect-btn',
          'ble-disconnect-btn', 'modal-ble-disconnect-btn', 'sticky-ble-disconnect-btn'
-        ].forEach(id => {
-            const el = document.getElementById(id);
-            if (el) el.style.display = 'none';
-        });
+        ].forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
 
-        // Status dot + label
         const status = document.createElement('span');
         status.style.cssText = 'display:flex;align-items:center;gap:5px;font-size:12px;color:#cdd6f4;';
         status.innerHTML =
@@ -138,15 +88,15 @@
             '<span id="proxy-ble-label">ESP32 nincs csatlakozva</span>';
 
         const connectBtn = document.createElement('button');
-        connectBtn.id = 'proxy-ble-connect-btn';
+        connectBtn.id        = 'proxy-ble-connect-btn';
         connectBtn.className = 'btn btn-primary btn-small';
         connectBtn.textContent = 'BLE csatlakozás';
         connectBtn.addEventListener('click', proxyBleConnect);
 
         const disconnectBtn = document.createElement('button');
-        disconnectBtn.id = 'proxy-ble-disconnect-btn';
-        disconnectBtn.className = 'btn btn-secondary btn-small';
-        disconnectBtn.textContent = 'BLE leválasztás';
+        disconnectBtn.id           = 'proxy-ble-disconnect-btn';
+        disconnectBtn.className    = 'btn btn-secondary btn-small';
+        disconnectBtn.textContent  = 'BLE leválasztás';
         disconnectBtn.style.display = 'none';
         disconnectBtn.addEventListener('click', proxyBleDisconnect);
 
@@ -155,7 +105,10 @@
         actions.appendChild(disconnectBtn);
     }
 
-    // ── 4. Poll /api/ble-status ───────────────────────────────────────────────
+    // ── 3. Poll /api/ble-status – sync window.bleConnected ───────────────────
+
+    let _lastBleOk      = null;
+    let _serialAvailable = false;
 
     async function updateProxyStatus() {
         let bleOk = false;
@@ -164,77 +117,31 @@
             if (r.ok) bleOk = (await r.json()).connected === true;
         } catch (_) {}
 
-        // Sync bleConnected so UI buttons (canControl, canPair) are enabled
-        if (window.bleConnected !== bleOk) {
-            window.bleConnected = bleOk;
-        }
+        // Set the global var — script.js reads this directly in every check
+        window.bleConnected = bleOk;
 
         _setBleButtonState(bleOk ? 'connected' : 'disconnected');
 
-        // Trigger UI refresh when state changes
         if (_lastBleOk !== bleOk) {
             _lastBleOk = bleOk;
-            if (bleOk) {
-                // Just connected: reload status + devices so cards render enabled
-                if (typeof loadStatus   === 'function') loadStatus();
-                if (typeof loadDevices  === 'function') loadDevices();
-            } else {
-                // Just disconnected: re-render cards as disabled
-                if (typeof loadDevices  === 'function') loadDevices();
-                if (typeof updateControlButtons === 'function') updateControlButtons();
-            }
+            // Reload UI so all conditional renders (canControl, canPair, status text) update
+            if (typeof loadStatus  === 'function') loadStatus();
+            if (typeof loadDevices === 'function') loadDevices();
         }
 
-        // Also update the serial-log button dot
         const dot = document.getElementById('serial-btn-dot');
         if (dot) dot.style.background = _serialAvailable ? '#a6e3a1' : '#f38ba8';
     }
 
-    // ── 5. Device card button patcher ────────────────────────────────────────
+    // ── 4. Serial log drawer ──────────────────────────────────────────────────
 
-    function _patchDeviceButtons() {
-        if (!_lastBleOk) return;
-        // renderOnOffCard embeds `disabled title="Csak BLE+Zigbee..."` when
-        // bleConnected===false. Remove those restrictions after render.
-        document.querySelectorAll(
-            '.device-card button[disabled], .device-card button[title*="BLE"], .device-card button[title*="Zigbee"]'
-        ).forEach(btn => {
-            btn.disabled = false;
-            btn.title = '';
-        });
-    }
-
-    // Intercept loadDevices to patch buttons after cards render
-    const _origLoadDevices = window.loadDevices;
-    window.loadDevices = async function () {
-        await _origLoadDevices();
-        _patchDeviceButtons();
-    };
-
-    // Cache zigbeeActive when loadStatus parses it (MutationObserver on rtc-status
-    // is brittle; instead we observe the pairing button title which reflects zigbeeActive)
-    const _statusObserver = new MutationObserver(function () {
-        const pairingBtn = document.getElementById('pairing-btn');
-        if (!pairingBtn) return;
-        // If pairing btn title mentions Zigbee (not BLE), zigbee IS active
-        const t = pairingBtn.title || '';
-        if (!t.includes('BLE') && !t.includes('Bluetooth')) {
-            window._proxyZigbeeActive = true;
-        }
-    });
-
-    // ── 6. Serial log drawer ──────────────────────────────────────────────────
-
-    let _serialSince    = 0;
-    let _serialPaused   = false;
-    let _serialAvailable = false;
-    let _drawerOpen     = false;
+    let _serialSince = 0;
+    let _serialPaused = false;
+    let _drawerOpen   = false;
 
     function injectSerialButton() {
-        // Add button to the sticky-ble-bar actions area
         const actions = document.querySelector('.ble-actions');
         if (!actions) return;
-
         const btn = document.createElement('button');
         btn.id = 'serial-log-btn';
         btn.className = 'btn btn-secondary btn-small';
@@ -250,41 +157,27 @@
         const drawer = document.createElement('div');
         drawer.id = 'serial-drawer';
         drawer.style.cssText =
-            'display:none;' +
             'position:fixed;top:48px;right:0;width:520px;max-width:100vw;' +
-            'height:calc(100vh - 48px);z-index:9990;' +
-            'background:#11111b;border-left:2px solid #313244;' +
-            'box-shadow:-4px 0 20px #0009;' +
-            'display:none;flex-direction:column;';
-
+            'height:calc(100vh - 48px);z-index:9990;display:none;flex-direction:column;' +
+            'background:#11111b;border-left:2px solid #313244;box-shadow:-4px 0 20px #0009;';
         drawer.innerHTML = `
             <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;
                         background:#1e1e2e;border-bottom:1px solid #313244;flex-shrink:0;">
               <span id="serial-drawer-dot" style="width:8px;height:8px;border-radius:50%;
                     background:#555;display:inline-block;flex-shrink:0;"></span>
-              <span style="font-size:13px;font-weight:600;color:#cdd6f4;flex:1;">
-                Soros port log &mdash; /dev/ttyACM0
-              </span>
-              <button id="serial-pause-btn" style="font-size:11px;padding:2px 8px;
-                      background:#313244;color:#cdd6f4;border:1px solid #555;
-                      border-radius:4px;cursor:pointer;">Szünet</button>
-              <button id="serial-clear-btn" style="font-size:11px;padding:2px 8px;
-                      background:#313244;color:#cdd6f4;border:1px solid #555;
-                      border-radius:4px;cursor:pointer;">Törlés</button>
-              <button id="serial-close-btn" style="font-size:13px;padding:2px 8px;
-                      background:transparent;color:#888;border:none;cursor:pointer;">✕</button>
+              <span style="font-size:13px;font-weight:600;color:#cdd6f4;flex:1;">Soros port log &mdash; /dev/ttyACM0</span>
+              <button id="serial-pause-btn" style="font-size:11px;padding:2px 8px;background:#313244;color:#cdd6f4;border:1px solid #555;border-radius:4px;cursor:pointer;">Szünet</button>
+              <button id="serial-clear-btn" style="font-size:11px;padding:2px 8px;background:#313244;color:#cdd6f4;border:1px solid #555;border-radius:4px;cursor:pointer;">Törlés</button>
+              <button id="serial-close-btn" style="font-size:13px;padding:2px 8px;background:transparent;color:#888;border:none;cursor:pointer;">✕</button>
             </div>
-            <div id="serial-log-body"
-                 style="flex:1;overflow-y:auto;font-family:monospace;font-size:12px;
-                        color:#a6e3a1;padding:6px 12px;box-sizing:border-box;"></div>`;
-
+            <div id="serial-log-body" style="flex:1;overflow-y:auto;font-family:monospace;font-size:12px;color:#a6e3a1;padding:6px 12px;box-sizing:border-box;"></div>`;
         document.body.appendChild(drawer);
 
         document.getElementById('serial-close-btn').addEventListener('click', toggleDrawer);
         document.getElementById('serial-pause-btn').addEventListener('click', function () {
             _serialPaused = !_serialPaused;
             this.textContent = _serialPaused ? 'Folytatás' : 'Szünet';
-            this.style.color  = _serialPaused ? '#f38ba8' : '#cdd6f4';
+            this.style.color = _serialPaused ? '#f38ba8' : '#cdd6f4';
         });
         document.getElementById('serial-clear-btn').addEventListener('click', function () {
             document.getElementById('serial-log-body').innerHTML = '';
@@ -300,10 +193,10 @@
     }
 
     function _colorize(msg) {
-        if (/\bE\b|\bERROR\b|error|Error/.test(msg))   return '#f38ba8';
-        if (/\bW\b|\bWARN\b|warn/.test(msg))            return '#fab387';
+        if (/\bE\b|\bERROR\b|error|Error/.test(msg))              return '#f38ba8';
+        if (/\bW\b|\bWARN\b|warn/.test(msg))                      return '#fab387';
         if (/\bI\b|\bINFO\b|\[BLE\]|\[HTTP\]|\[SERIAL\]/.test(msg)) return '#89dceb';
-        if (/\bD\b|\bDEBUG\b/.test(msg))                return '#6c7086';
+        if (/\bD\b|\bDEBUG\b/.test(msg))                          return '#6c7086';
         return '#a6e3a1';
     }
 
@@ -314,28 +207,20 @@
             if (!r.ok) return;
             const d = await r.json();
             _serialAvailable = d.available;
-
-            // Update dots
             const color = d.available ? '#a6e3a1' : '#f38ba8';
             ['serial-btn-dot', 'serial-drawer-dot'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) el.style.background = color;
             });
-
             if (!d.lines || d.lines.length === 0) return;
             _serialSince = d.total;
-
-            // Only render if drawer is open (saves DOM work when hidden)
             if (!_drawerOpen) return;
-
             const body = document.getElementById('serial-log-body');
             if (!body) return;
             const atBottom = body.scrollHeight - body.scrollTop <= body.clientHeight + 40;
             d.lines.forEach(function (entry) {
                 const line = document.createElement('div');
-                line.style.cssText =
-                    'padding:1px 0;border-bottom:1px solid #1a1a2a;' +
-                    'white-space:pre-wrap;word-break:break-all;';
+                line.style.cssText = 'padding:1px 0;border-bottom:1px solid #1a1a2a;white-space:pre-wrap;word-break:break-all;';
                 line.innerHTML =
                     '<span style="color:#6c7086;">' + entry.t + '</span> ' +
                     '<span style="color:' + _colorize(entry.msg) + ';">' +
@@ -348,7 +233,7 @@
         } catch (_) {}
     }
 
-    // ── 6. Boot ───────────────────────────────────────────────────────────────
+    // ── 5. Boot ───────────────────────────────────────────────────────────────
 
     document.addEventListener('DOMContentLoaded', function () {
         injectBleButtons();
@@ -357,9 +242,6 @@
         updateProxyStatus();
         setInterval(updateProxyStatus, 5000);
         setInterval(pollSerialLogs, 2000);
-
-        const pairingBtn = document.getElementById('pairing-btn');
-        if (pairingBtn) _statusObserver.observe(pairingBtn, { attributes: true, attributeFilter: ['title', 'disabled'] });
     });
 
 })();
