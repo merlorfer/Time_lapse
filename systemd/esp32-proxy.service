@@ -1,0 +1,17 @@
+[Unit]
+Description=ESP32C6 BLE Proxy (HTTP :8082)
+After=network.target bluetooth.target
+Wants=bluetooth.target
+
+[Service]
+Type=simple
+User=orangepi
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /home/orangepi/esp32/esp32_proxy.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

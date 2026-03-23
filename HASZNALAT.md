@@ -113,6 +113,41 @@ sudo systemctl daemon-reload
 
 ---
 
+## ESP32C6 vezérlőfelület (BLE proxy)
+
+Az Orange Pi BLE-n keresztül csatlakozik az ESP32C6 Zigbee koordinátorhoz, és böngészőből elérhető webes felületet biztosít.
+
+**Elérés:** http://100.68.70.151:8082/  (NordVPN Meshnet)
+
+Bootoláskor automatikusan indul. Az ESP32C6-ot **nem kell USB-n csatlakoztatni** – BLE-n keresztül kommunikál.
+
+```bash
+# Státusz
+systemctl status esp32-proxy
+
+# Újraindítás
+sudo systemctl restart esp32-proxy
+
+# BLE kapcsolat állapota
+journalctl -u esp32-proxy -n 20
+
+# Le/felállítás
+sudo systemctl stop esp32-proxy
+sudo systemctl start esp32-proxy
+```
+
+**Megjegyzés:** Ha az ESP32C6 nem elérhető, a proxy 503-as hibaüzenetet ad vissza. Az ESP32C6 újraindítása után a proxy automatikusan visszacsatlakozik.
+
+**Eltávolítás:**
+```bash
+sudo systemctl stop esp32-proxy
+sudo systemctl disable esp32-proxy
+sudo rm /etc/systemd/system/esp32-proxy.service
+sudo systemctl daemon-reload
+```
+
+---
+
 ## Azonnali renderelés (meglévő képekből)
 
 Ha nem akarsz várni az éjféli automatikus compile-ra:
