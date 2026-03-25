@@ -6,9 +6,10 @@
 # A script leállítja a screen serial monitort flashelés előtt,
 # majd újraindítja utána.
 
-FIRMWARE_DIR="${1:-/home/orangepi/esp32}"
+FIRMWARE_DIR="${1:-$HOME/esp32firmware}"
 ESPTOOL="$HOME/.local/bin/esptool"
 PORT="/dev/ttyACM0"
+BAUD=460800
 
 echo "=== ESP32C6 Flash ==="
 echo "Firmware: $FIRMWARE_DIR"
@@ -27,16 +28,13 @@ sudo systemctl stop esp32-serial 2>/dev/null || true
 sleep 1
 
 # Flashelés
-echo "Flashelés..."
-"$ESPTOOL" --chip esp32c6 --port "$PORT" --baud 115200 write-flash \
+echo "Flashelés ($BAUD baud)..."
+"$ESPTOOL" --chip esp32c6 --port "$PORT" --baud "$BAUD" \
+    write_flash --flash_mode dio --flash_freq 80m --flash_size 4MB \
     0x0       "$FIRMWARE_DIR/bootloader.bin" \
     0x8000    "$FIRMWARE_DIR/partition-table.bin" \
     0x10000   "$FIRMWARE_DIR/esp32c6_zigbee_gateway.bin" \
-    0x1f5000  "$FIRMWARE_DIR/storage.bin" 2>/dev/null || \
-"$ESPTOOL" --chip esp32c6 --port "$PORT" --baud 115200 write-flash \
-    0x0       "$FIRMWARE_DIR/bootloader.bin" \
-    0x8000    "$FIRMWARE_DIR/partition-table.bin" \
-    0x10000   "$FIRMWARE_DIR/esp32c6_zigbee_gateway.bin"
+    0x1f5000  "$FIRMWARE_DIR/storage.bin"
 
 STATUS=$?
 

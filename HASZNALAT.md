@@ -154,15 +154,20 @@ Az ESP32C6 az Orange Pi USB portjára csatlakoztatva távolról is felflashelhet
 
 **Előkészítés** – másold fel az új firmware fájlokat az Orange Pi-re:
 ```bash
-pscp -pw orangepi build/bootloader/bootloader.bin          orangepi@100.68.70.151:/home/orangepi/esp32/
-pscp -pw orangepi build/partition_table/partition-table.bin orangepi@100.68.70.151:/home/orangepi/esp32/
-pscp -pw orangepi build/esp32c6_zigbee_gateway.bin          orangepi@100.68.70.151:/home/orangepi/esp32/
-pscp -pw orangepi build/storage.bin                         orangepi@100.68.70.151:/home/orangepi/esp32/
+pscp -pw orangepi build/bootloader/bootloader.bin           orangepi@100.68.70.151:/home/orangepi/esp32firmware/
+pscp -pw orangepi build/partition_table/partition-table.bin  orangepi@100.68.70.151:/home/orangepi/esp32firmware/
+pscp -pw orangepi build/esp32c6_zigbee_gateway.bin           orangepi@100.68.70.151:/home/orangepi/esp32firmware/
+pscp -pw orangepi build/storage.bin                          orangepi@100.68.70.151:/home/orangepi/esp32firmware/
 ```
 
-**Flashelés** – az Orange Pi-n:
+**Flashelés** – SSH-n keresztül (egy sorban, távolról):
 ```bash
-bash /home/orangepi/esp32/flash_esp32.sh
+ssh orangepi@100.68.70.151 'bash /home/orangepi/esp32/flash_esp32.sh'
+```
+
+Vagy közvetlenül:
+```bash
+ssh orangepi@100.68.70.151 '~/.local/bin/esptool --chip esp32c6 --port /dev/ttyACM0 --baud 460800 write_flash --flash_mode dio --flash_freq 80m --flash_size 4MB 0x0 esp32firmware/bootloader.bin 0x8000 esp32firmware/partition-table.bin 0x10000 esp32firmware/esp32c6_zigbee_gateway.bin 0x1f5000 esp32firmware/storage.bin'
 ```
 
 A script automatikusan:
