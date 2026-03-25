@@ -102,3 +102,6 @@ mv -f "$MASTER_TMP" "$MASTER_VIDEO"
 MASTER_SIZE=$(du -sh "$MASTER_VIDEO" | cut -f1)
 log "Master rebuilt: $MASTER_VIDEO (${MASTER_SIZE}, ${SEGMENT_COUNT} segments)"
 log "=== Done ==="
+
+# Szenzor adatok mentése
+bash "$(dirname "$0")/sensor_backup.sh" >> "$LOG" 2>&1

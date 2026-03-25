@@ -210,6 +210,7 @@ button:disabled { opacity: .35; cursor: not-allowed; }
     <div class="tabs" style="margin-top:12px">
       <button class="tab active" onclick="switchTab('archive')">📅 Napi videók</button>
       <button class="tab"        onclick="switchTab('renders')">🎬 Manuális renderek</button>
+      <button class="tab"        onclick="switchTab('sensor');loadSensorChart()">📊 Szenzor adatok</button>
     </div>
     <div id="tab-archive" class="tab-panel active">
       <div id="master-row-wrap"></div>
@@ -217,6 +218,24 @@ button:disabled { opacity: .35; cursor: not-allowed; }
     </div>
     <div id="tab-renders" class="tab-panel">
       <div id="video-list-renders" class="video-list"><div class="video-empty">Betöltés...</div></div>
+    </div>
+    <div id="tab-sensor" class="tab-panel">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px;">
+        <label style="font-size:12px;color:var(--muted);">Kezdő dátum:
+          <input type="date" id="sensor-from" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;margin-left:6px;">
+        </label>
+        <label style="font-size:12px;color:var(--muted);">Végső dátum:
+          <input type="date" id="sensor-to" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;margin-left:6px;">
+        </label>
+        <button class="btn-blue" onclick="loadSensorChart()">Betöltés</button>
+        <span id="sensor-status" style="font-size:12px;color:var(--muted);"></span>
+      </div>
+      <div style="position:relative;background:#0a1020;border-radius:8px;padding:12px;">
+        <canvas id="sensor-chart" style="width:100%;max-height:380px;"></canvas>
+        <div id="sensor-no-data" style="display:none;text-align:center;padding:40px;color:var(--muted);">
+          Nincs adat a megadott időszakra.
+        </div>
+      </div>
     </div>
   </div>
 
@@ -558,6 +577,143 @@ async function api(url, method = 'GET', body = null) {
 
 function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+// ── Sensor chart ──────────────────────────────────────────────────────────────
+
+let _sensorChart = null;
+
+(function initSensorDates() {
+  const today = new Date().toISOString().slice(0,10);
+  document.getElementById('sensor-from').value = today;
+  document.getElementById('sensor-to').value   = today;
+})();
+
+async function loadSensorChart() {
+  const fromEl = document.getElementById('sensor-from');
+  const toEl   = document.getElementById('sensor-to');
+  const status = document.getElementById('sensor-status');
+  const noData = document.getElementById('sensor-no-data');
+  const canvas = document.getElementById('sensor-chart');
+
+  status.textContent = 'Betöltés…';
+  noData.style.display = 'none';
+  canvas.style.display = 'block';
+
+  let data;
+  try {
+    const r = await fetch(`/api/sensor-data?from=${fromEl.value}&to=${toEl.value}`);
+    data = await r.json();
+  } catch(e) {
+    status.textContent = 'Hiba: ' + e.message;
+    return;
+  }
+
+  const sensors = Object.keys(data);
+  if (sensors.length === 0) {
+    noData.style.display = 'block';
+    canvas.style.display = 'none';
+    status.textContent = '';
+    if (_sensorChart) { _sensorChart.destroy(); _sensorChart = null; }
+    return;
+  }
+
+  // Build datasets
+  const COLORS = ['#89dceb','#a6e3a1','#fab387','#f38ba8','#cba6f7','#f9e2af'];
+  const datasets = [];
+  const allLabels = new Set();
+
+  sensors.forEach((name, si) => {
+    const rows = data[name];
+    rows.forEach(r => allLabels.add(r.timestamp));
+  });
+
+  const labels = Array.from(allLabels).sort();
+
+  sensors.forEach((name, si) => {
+    const rows  = data[name];
+    const byTs  = {};
+    rows.forEach(r => { byTs[r.timestamp] = r; });
+
+    // Determine what fields this sensor has
+    const sample = rows[0] || {};
+    const fields = [];
+    if (sample.temperature !== undefined && sample.temperature !== '') fields.push('temperature');
+    if (sample.humidity    !== undefined && sample.humidity    !== '') fields.push('humidity');
+    if (sample.water_level !== undefined && sample.water_level !== '') fields.push('water_level');
+
+    if (fields.length === 0) fields.push('water_level');
+
+    fields.forEach((field, fi) => {
+      const color = COLORS[(si * 3 + fi) % COLORS.length];
+      const label_map = {temperature:'Hőmérséklet (°C)', humidity:'Páratartalom (%)',
+                         water_level:'Vízszint', lower_active:'Alsó küszöb', upper_active:'Felső küszöb'};
+      datasets.push({
+        label:           `${name} – ${label_map[field] || field}`,
+        data:            labels.map(ts => {
+          const row = byTs[ts];
+          if (!row) return null;
+          const v = row[field];
+          return v === '' || v === undefined ? null : parseFloat(v);
+        }),
+        borderColor:     color,
+        backgroundColor: color + '33',
+        borderWidth:     2,
+        pointRadius:     2,
+        tension:         0.3,
+        spanGaps:        true,
+        stepped:         field === 'water_level' ? 'before' : false,
+      });
+    });
+
+    // Overflow marker if any
+    const hasOverflow = rows.some(r => r.error && r.error !== '');
+    if (hasOverflow) {
+      datasets.push({
+        label:           `${name} – Hiba`,
+        data:            labels.map(ts => {
+          const row = byTs[ts];
+          return row && row.error ? 0.5 : null;
+        }),
+        borderColor:     '#f38ba8',
+        backgroundColor: '#f38ba8',
+        pointRadius:     6,
+        pointStyle:      'triangle',
+        showLine:        false,
+        spanGaps:        false,
+      });
+    }
+  });
+
+  const totalPoints = labels.length;
+  status.textContent = `${totalPoints} mérési pont, ${sensors.length} szenzor`;
+
+  if (_sensorChart) _sensorChart.destroy();
+  _sensorChart = new Chart(canvas, {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#cdd6f4', font: { size: 11 } } },
+        tooltip: { backgroundColor: '#1e1e2e', titleColor: '#cdd6f4', bodyColor: '#a6adc8' },
+      },
+      scales: {
+        x: {
+          ticks: { color: '#6c7086', maxRotation: 45, font: { size: 10 } },
+          grid:  { color: '#313244' },
+        },
+        y: {
+          ticks: { color: '#6c7086' },
+          grid:  { color: '#313244' },
+        },
+      },
+    },
+  });
 }
 </script>
 </body>

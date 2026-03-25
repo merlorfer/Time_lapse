@@ -85,11 +85,9 @@
 
             <!-- Zigbee Devices Section -->
             <section class="card">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                    <h2 style="margin: 0; padding: 0; border: none;">Zigbee Eszkozok</h2>
-                    <button onclick="refreshDevices()" class="btn btn-secondary btn-small" id="refresh-devices-btn">
-                        Frissites
-                    </button>
+                <div class="section-header">
+                    <h2>Zigbee Eszkozok</h2>
+                    <button onclick="refreshDevices()" class="btn btn-secondary btn-small" id="refresh-devices-btn">Frissites</button>
                 </div>
                 <p class="hint">Eszkoz hozzaadasahoz nyomja meg hosszan a gombot az ESP-n (Zigbee modban)</p>
                 <div id="device-list" class="device-list">
@@ -129,41 +127,20 @@
                     </div>
                 </div>
 
-                <hr style="margin: 15px 0; border-color: var(--border-color);">
-
-                <!-- WiFi behavior (kept) -->
-                <div class="form-group">
-                    <label>Wi-Fi AP bekapcsolasakor:</label>
-                    <div class="radio-group">
-                        <label class="radio-label">
-                            <input type="radio" name="wifi-behavior" value="maintain" id="wifi-maintain">
-                            <span>Allapot megtartasa</span>
-                        </label>
-                        <label class="radio-label">
-                            <input type="radio" name="wifi-behavior" value="poweroff" id="wifi-poweroff" checked>
-                            <span>Osszes kikapcsolasa</span>
-                        </label>
-                    </div>
-                </div>
-
-                <button onclick="saveGlobalConfig()" class="btn btn-primary">Beallitasok mentese</button>
+                <button onclick="saveGlobalConfig()" class="btn btn-primary" style="margin-top:10px">Beallitasok mentese</button>
             </section>
 
             <!-- Rules Engine Section -->
             <section class="card">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                    <h2 style="margin: 0; padding: 0; border: none;">Szabalyok</h2>
-                    <div style="display: flex; gap: 8px; align-items: center;">
-                        <label style="display: flex; align-items: center; gap: 5px; font-size: 0.9em; cursor: pointer;">
-                            <input type="checkbox" id="rules-enabled" onchange="onRulesEnabledChange()" checked>
-                            Szabályok futtatása
+                <div class="section-header">
+                    <h2>Szabalyok</h2>
+                    <div class="rules-header-actions">
+                        <label class="rules-enabled-label">
+                            <input type="checkbox" id="rules-enabled" onchange="onRulesEnabledChange()">
+                            Szabalyok futtatasa
                         </label>
-                        <button onclick="resetRulesEngine()" class="btn btn-danger btn-small" title="Torol minden szabalyt es valtozo-konfigot az NVS-bol">
-                            Reset
-                        </button>
-                        <button onclick="toggleRulesEditor()" class="btn btn-secondary btn-small" id="rules-toggle-btn">
-                            Szerkesztes
-                        </button>
+                        <button onclick="resetRulesEngine()" class="btn btn-danger btn-small" title="Torol minden szabalyt es valtozo-konfigot az NVS-bol">Reset</button>
+                        <button onclick="toggleRulesEditor()" class="btn btn-secondary btn-small" id="rules-toggle-btn">Szerkesztes</button>
                     </div>
                 </div>
                 <p class="hint">Szabalyok. Eszkozneveknel ne hasznaljon szokozoket (hasznaljon _ jelet).</p>
@@ -178,7 +155,7 @@
                         <details>
                             <summary>Szintaxis segitseg</summary>
                             <pre>on SensorNev do
-  if [SensorNev] < 18 and [hour] >= 6
+  if [SensorNev] &lt; 18 and [hour] &gt;= 6
     on Eszkoz
   else
     off Eszkoz
@@ -202,7 +179,7 @@ endon
 // Valtozo: set var1 ertek
 // Ertekek: [SensorNev] [var1] [hour]
 //          [minute] [uptime]
-// Operatorok: < > <= >= = !=
+// Operatorok: &lt; &gt; &lt;= &gt;= = !=
 // Logika: and, or, not</pre>
                         </details>
                     </div>
@@ -215,13 +192,13 @@ endon
 
                 <!-- Rules Variables -->
                 <div id="rules-vars-section">
-                    <h3 style="margin-top: 15px; font-size: 0.95rem;">Valtozok</h3>
+                    <h3 class="rules-subheader">Valtozok</h3>
                     <div id="rules-vars-list" class="rules-cards"></div>
                 </div>
 
                 <!-- Rules Timers -->
                 <div id="rules-timers-section">
-                    <h3 style="margin-top: 10px; font-size: 0.95rem;">Timerek</h3>
+                    <h3 class="rules-subheader">Timerek</h3>
                     <div id="rules-timers-list" class="rules-cards"></div>
                 </div>
             </section>
@@ -238,17 +215,17 @@ endon
                     </ul>
                 </div>
                 <p class="hint">Bluetooth csatlakozashoz nyomd meg a gombot BLE mod aktivalasakor</p>
-                <hr style="margin: 15px 0; border-color: var(--border-color);">
+                <hr class="divider">
                 <button onclick="factoryReset()" class="btn btn-danger">Gyari alaphelyzetbe allitas</button>
                 <p class="hint warning">Torli az osszes eszkozt es beallitast!</p>
             </section>
 
             <!-- Log viewer section -->
             <section class="card" id="logs-section">
-                <h2>Rendszernaplо</h2>
+                <h2>Rendszernaplo</h2>
                 <div class="log-tab-bar">
-                    <button class="log-tab-btn active" onclick="showLogTab('live')" id="log-tab-btn-live">Élо napló</button>
-                    <button class="log-tab-btn" onclick="showLogTab('history')" id="log-tab-btn-history">Előzmények</button>
+                    <button class="log-tab-btn active" onclick="showLogTab('live')" id="log-tab-btn-live">Elo naplo</button>
+                    <button class="log-tab-btn" onclick="showLogTab('history')" id="log-tab-btn-history">Elozmények</button>
                 </div>
 
                 <!-- Live log tab -->
@@ -257,17 +234,22 @@ endon
                     <div class="log-controls">
                         <label><input type="checkbox" id="log-autoscroll" checked> Auto-scroll</label>
                         <label><input type="checkbox" id="log-zigbee-only" onchange="onLogFilterChange()"> Csak Zigbee logok</label>
-                        <button class="btn btn-secondary btn-small" onclick="clearLiveDisplay()">Kijelző törlése</button>
+                        <button class="btn btn-secondary btn-small" onclick="clearLiveDisplay()">Kijelzo torlese</button>
                     </div>
                 </div>
 
                 <!-- History tab -->
                 <div id="log-tab-history" class="hidden">
-                    <select id="history-session-select" onchange="loadHistoryContent()">
-                        <option value="">— Session választása —</option>
-                    </select>
-                    <div id="history-log-box" class="log-box"></div>
-                    <button class="btn btn-danger btn-small" onclick="clearLogHistory()" style="margin-top:6px">Előzmények törlése</button>
+                    <div id="log-history-ble-msg" class="hint hidden">
+                        BLE uzemmodban az elozmeny naplo nem elheto el. Kapcsoljon WiFi-re.
+                    </div>
+                    <div id="log-history-wifi-content">
+                        <select id="history-session-select" onchange="loadHistoryContent()">
+                            <option value="">&#8212; Session valasztasa &#8212;</option>
+                        </select>
+                        <div id="history-log-box" class="log-box"></div>
+                        <button class="btn btn-danger btn-small" onclick="clearLogHistory()" style="margin-top:6px">Elozmények torlese</button>
+                    </div>
                 </div>
             </section>
         </main>
@@ -276,7 +258,6 @@ endon
         <div id="device-modal" class="modal hidden">
             <div class="modal-content">
                 <span class="close" onclick="closeModal()">&times;</span>
-
                 <h2>Eszkoz beallitasa</h2>
                 <form id="device-form">
                     <input type="hidden" id="edit-ieee-addr">
@@ -338,7 +319,7 @@ endon
                     <div id="sensor-settings" class="hidden">
                         <div class="sensor-current-value">
                             <span class="sensor-value-number" id="edit-current-value">--</span>
-                            <span class="sensor-value-unit" id="edit-value-unit">°C</span>
+                            <span class="sensor-value-unit" id="edit-value-unit">&#176;C</span>
                         </div>
 
                         <div class="threshold-group">
@@ -392,7 +373,7 @@ endon
                                 <input type="number" id="edit-timeout" min="10" max="3600" value="60">
                             </div>
                             <div class="form-group">
-                                <label for="edit-error-linked">Hiba-eszköz:</label>
+                                <label for="edit-error-linked">Hiba-eszkoz:</label>
                                 <select id="edit-error-linked" onchange="updateErrorActionVisibility()"></select>
                             </div>
                             <div class="form-group hidden" id="error-action-group">
@@ -405,19 +386,19 @@ endon
                         </div>
 
                         <div class="threshold-group" id="report-settings-group">
-                            <h3>Jelentési beallitasok</h3>
+                            <h3>Jelentesi beallitasok</h3>
                             <div class="form-group">
-                                <label for="edit-report-min">Min. időköz (mp):</label>
+                                <label for="edit-report-min">Min. idokoz (mp):</label>
                                 <input type="number" id="edit-report-min" min="0" max="65535" value="0">
                             </div>
                             <div class="form-group">
-                                <label for="edit-report-max">Max. időköz (mp):</label>
+                                <label for="edit-report-max">Max. idokoz (mp):</label>
                                 <input type="number" id="edit-report-max" min="1" max="65535" value="10">
                             </div>
                             <div class="form-group">
-                                <label for="edit-report-change">Jelentendő változás:</label>
+                                <label for="edit-report-change">Jelentendo valtozas:</label>
                                 <input type="number" id="edit-report-change" min="1" max="32767" value="50" oninput="updateReportChangeDisplay()">
-                                <small class="hint">= <span id="report-change-display">0.50</span> <span id="report-change-unit">egység</span></small>
+                                <small class="hint">= <span id="report-change-display">0.50</span> <span id="report-change-unit">egyseg</span></small>
                             </div>
                         </div>
                     </div>
@@ -438,16 +419,10 @@ endon
     <script src="script.js"></script>
     <script src="proxy-patch.js"></script>
     <script>
-        // Register service worker for PWA
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('/service-worker.js')
-                    .then(registration => {
-                        console.log('Service Worker registered:', registration);
-                    })
-                    .catch(error => {
-                        console.log('Service Worker registration failed:', error);
-                    });
+                    .catch(err => console.log('SW registration failed:', err));
             });
         }
     </script>

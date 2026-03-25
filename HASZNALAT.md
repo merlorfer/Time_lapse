@@ -146,6 +146,49 @@ sudo rm /etc/systemd/system/esp32-proxy.service
 sudo systemctl daemon-reload
 ```
 
+---
+
+## ESP32C6 firmware frissítése (távoli flash)
+
+Az ESP32C6 az Orange Pi USB portjára csatlakoztatva távolról is felflashelhető.
+
+**Előkészítés** – másold fel az új firmware fájlokat az Orange Pi-re:
+```bash
+pscp -pw orangepi build/bootloader/bootloader.bin          orangepi@100.68.70.151:/home/orangepi/esp32/
+pscp -pw orangepi build/partition_table/partition-table.bin orangepi@100.68.70.151:/home/orangepi/esp32/
+pscp -pw orangepi build/esp32c6_zigbee_gateway.bin          orangepi@100.68.70.151:/home/orangepi/esp32/
+pscp -pw orangepi build/storage.bin                         orangepi@100.68.70.151:/home/orangepi/esp32/
+```
+
+**Flashelés** – az Orange Pi-n:
+```bash
+bash /home/orangepi/esp32/flash_esp32.sh
+```
+
+A script automatikusan:
+1. Leállítja a serial monitort (screen) – felszabadítja a portot
+2. Felírja a firmware-t (bootloader + partíciós tábla + app + storage)
+3. Újraindítja a serial monitort
+
+**Soros log élőben** (terminálban):
+```bash
+tail -f /tmp/esp32_serial.log
+```
+
+**Interaktív soros konzol** (be is lehet gépelni az ESP32-nek):
+```bash
+screen -r esp32serial
+# Kilépés konzolból (de nem állítja le): Ctrl+A, majd D
+```
+
+**Serial monitor státusz:**
+```bash
+systemctl status esp32-serial
+sudo systemctl restart esp32-serial
+```
+
+---
+
 ### ESP32 proxy weboldalak frissítése
 
 A proxy a `CLCode01/web/` fájljainak módosított másolatát szolgálja ki (`scripts/esp32-web/`).

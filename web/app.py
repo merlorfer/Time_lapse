@@ -4,6 +4,7 @@ Timelapse Web UI – Python stdlib only, no extra dependencies
 Port: 8082
 """
 
+import csv
 import http.server
 import json
 import subprocess
@@ -11,13 +12,15 @@ import os
 import glob
 import re
 import threading
+from datetime import date, timedelta
 from urllib.parse import urlparse, parse_qs
 
-SCRIPT_DIR = "/home/orangepi/timelapse/scripts"
-LOG_DIR    = "/home/orangepi/timelapse/logs"
-FRAME_DIR  = "/tmp/timelapse_frames"
-PORT       = 8082
-HOST       = "0.0.0.0"
+SCRIPT_DIR      = "/home/orangepi/timelapse/scripts"
+LOG_DIR         = "/home/orangepi/timelapse/logs"
+FRAME_DIR       = "/tmp/timelapse_frames"
+SENSOR_RAM_DIR  = "/tmp/sensor_data"
+PORT            = 8082
+HOST            = "0.0.0.0"
 
 ALLOWED_SCRIPTS = {
     "start_timelapse", "stop_timelapse",
@@ -94,6 +97,61 @@ def get_videos() -> dict:
         "renders": list_dir(renders_dir, "*.mp4"),
         "master":  master,
     }
+
+# ── Sensor data helpers ───────────────────────────────────────────────────────
+
+def get_sensor_archive_dir() -> str:
+    return os.path.join(get_video_base(), "sensor_data")
+
+def get_sensor_day_dir(day: str) -> str:
+    """Return path to sensor data for a given YYYY-MM-DD, checking ramdisk then archive."""
+    ram = os.path.join(SENSOR_RAM_DIR, day)
+    if os.path.isdir(ram):
+        return ram
+    return os.path.join(get_sensor_archive_dir(), day)
+
+def list_sensor_dates() -> list:
+    dates = set()
+    for base in [SENSOR_RAM_DIR, get_sensor_archive_dir()]:
+        if os.path.isdir(base):
+            for d in os.listdir(base):
+                if re.match(r"^\d{4}-\d{2}-\d{2}$", d):
+                    dates.add(d)
+    return sorted(dates, reverse=True)
+
+def read_sensor_csv(filepath: str) -> list:
+    rows = []
+    try:
+        with open(filepath, newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                rows.append(row)
+    except Exception:
+        pass
+    return rows
+
+def get_sensor_data(from_date: str, to_date: str) -> dict:
+    """Return sensor readings for a date range. {sensor_name: [rows]}"""
+    result = {}
+    try:
+        d_from = date.fromisoformat(from_date)
+        d_to   = date.fromisoformat(to_date)
+    except ValueError:
+        return result
+    cur = d_from
+    while cur <= d_to:
+        day_str = cur.isoformat()
+        day_dir = get_sensor_day_dir(day_str)
+        if os.path.isdir(day_dir):
+            for csv_file in glob.glob(os.path.join(day_dir, "*.csv")):
+                name = os.path.splitext(os.path.basename(csv_file))[0]
+                rows = read_sensor_csv(csv_file)
+                if name not in result:
+                    result[name] = []
+                result[name].extend(rows)
+        cur += timedelta(days=1)
+    return result
+
 
 # ── Status helper ────────────────────────────────────────────────────────────
 def get_status() -> dict:
@@ -174,6 +232,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             log_type = qs.get("type", ["capture"])[0]
             lines    = min(int(qs.get("lines", ["200"])[0]), 500)
             self._serve_logs(log_type, lines)
+        elif path == "/api/sensor-dates":
+            self._send_json({"dates": list_sensor_dates()})
+        elif path == "/api/sensor-data":
+            qs      = parse_qs(parsed.query)
+            today   = date.today().isoformat()
+            f_date  = qs.get("from", [today])[0]
+            t_date  = qs.get("to",   [today])[0]
+            self._send_json(get_sensor_data(f_date, t_date))
         else:
             self.send_error(404)
 
