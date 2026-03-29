@@ -61,20 +61,23 @@ else
         --resolution "$RESOLUTION" \
         --skip "$CAMERA_SKIP" \
         --jpeg "$JPEG_QUALITY" \
-        --top-banner \
-        --banner-colour "#00000000" \
-        --font "${FONT_FILE}:${FONT_SIZE}" \
-        --subtitle "$(date '+%Y-%m-%d %H:%M:%S')" \
-        --no-timestamp \
+        --no-banner \
         "$OUTPUT" 2>> "$LOG"
     CAPTURE_OK=$?
     METHOD="fswebcam"
 fi
 
-if [ $CAPTURE_OK -eq 0 ]; then
-    date +%s > "$LAST_CAPTURE_FILE"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') Captured: $OUTPUT [${METHOD}] (${FREE_MB}MB free)" >> "$LOG"
-else
+if [ $CAPTURE_OK -ne 0 ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: capture failed [${METHOD}]" >> "$LOG"
     exit 1
 fi
+
+# --- Időbélyeg overlay (ffmpeg drawtext) ---
+DISPLAY_TS=$(date '+%Y-%m-%d %H\:%M\:%S')
+TMP_OUTPUT="${OUTPUT}.tmp.jpg"
+ffmpeg -y -i "$OUTPUT" \
+    -vf "drawtext=fontfile=${FONT_FILE}:text='${DISPLAY_TS}':fontsize=48:fontcolor=white:shadowcolor=black@0.8:shadowx=2:shadowy=2:x=20:y=15:box=1:boxcolor=black@0.6:boxborderw=12" \
+    -q:v 2 "$TMP_OUTPUT" >> "$LOG" 2>&1 && mv "$TMP_OUTPUT" "$OUTPUT"
+
+date +%s > "$LAST_CAPTURE_FILE"
+echo "$(date '+%Y-%m-%d %H:%M:%S') Captured: $OUTPUT [${METHOD}] (${FREE_MB}MB free)" >> "$LOG"
