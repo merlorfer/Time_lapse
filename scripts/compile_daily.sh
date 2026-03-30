@@ -17,8 +17,8 @@ if [ "$VIDEO_BASE" = "/home/orangepi/timelapse/videos" ]; then
     log "WARNING: External storage not available, falling back to SD card"
 fi
 
-# --- Az előző nap dátuma ---
-YESTERDAY=$(date -d "yesterday" '+%Y-%m-%d')
+# --- Az előző nap dátuma (explicit számítás, DST-biztos) ---
+YESTERDAY=$(date -d "$(date '+%Y-%m-%d') - 1 day" '+%Y-%m-%d')
 DAILY_VIDEO="${ARCHIVE_DIR}/${YESTERDAY}.mp4"
 
 log "=== Compiling daily video for ${YESTERDAY} ==="
