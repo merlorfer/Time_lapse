@@ -240,9 +240,12 @@ def _save_sensor_config():
         print(f"[SENSOR] Config save error: {exc}")
 
 
+SENSOR_SUSPEND_MINUTES = 60
+
 def _get_runtime(ieee: str) -> dict:
     if ieee not in _sensor_runtime:
-        _sensor_runtime[ieee] = {"consecutive_failures": 0, "suspended": False, "last_ok": None}
+        _sensor_runtime[ieee] = {"consecutive_failures": 0, "suspended": False,
+                                  "suspended_at": None, "last_ok": None}
     return _sensor_runtime[ieee]
 
 
@@ -277,7 +280,9 @@ def _extract_reading(dev: dict) -> dict:
     if "temperature" in dtype or "temperature" in sensor:
         row["temperature"] = sensor.get("current_value", "")
         row["humidity"]    = sensor.get("humidity", "")
-    elif "water_level" in dtype:
+    elif "humidity" in dtype:
+        row["humidity"] = sensor.get("current_value", "")
+    elif "water_level" in dtype or "leak" in dtype:
         row["water_level"]  = sensor.get("current_value", "")
         row["lower_active"] = int(bool(sensor.get("lower_active")))
         row["upper_active"] = int(bool(sensor.get("upper_active")))
@@ -318,7 +323,8 @@ def _collect_now(to_collect: list):
                 rt = _get_runtime(ieee)
                 rt["consecutive_failures"] += 1
                 if rt["consecutive_failures"] >= 3:
-                    rt["suspended"] = True
+                    rt["suspended"]    = True
+                    rt["suspended_at"] = time.time()
                     print(f"[SENSOR] {ieee} suspended after 3 consecutive failures")
         return
 
@@ -355,7 +361,13 @@ def _sensor_scheduler():
                     continue
                 rt = _get_runtime(ieee)
                 if rt["suspended"]:
-                    continue
+                    if rt.get("suspended_at") and \
+                       (time.time() - rt["suspended_at"]) >= SENSOR_SUSPEND_MINUTES * 60:
+                        rt["suspended"]          = False
+                        rt["consecutive_failures"] = 0
+                        print(f"[SENSOR] {ieee} suspension lifted after {SENSOR_SUSPEND_MINUTES} min")
+                    else:
+                        continue
                 interval = max(1, cfg.get("interval_min", 60))
                 if now_min % interval == 0:
                     to_collect.append(ieee)

@@ -19,6 +19,7 @@ SCRIPT_DIR      = "/home/orangepi/timelapse/scripts"
 LOG_DIR         = "/home/orangepi/timelapse/logs"
 FRAME_DIR       = "/tmp/timelapse_frames"
 SENSOR_RAM_DIR  = "/tmp/sensor_data"
+SERIAL_LOG_FILE = "/tmp/esp32_serial.log"
 PORT            = 8082
 HOST            = "0.0.0.0"
 
@@ -232,6 +233,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             log_type = qs.get("type", ["capture"])[0]
             lines    = min(int(qs.get("lines", ["200"])[0]), 500)
             self._serve_logs(log_type, lines)
+        elif path == "/api/serial-log":
+            qs    = parse_qs(parsed.query)
+            lines = min(int(qs.get("lines", ["200"])[0]), 1000)
+            self._serve_serial_log(lines)
         elif path == "/api/sensor-dates":
             self._send_json({"dates": list_sensor_dates()})
         elif path == "/api/sensor-data":
@@ -274,6 +279,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", len(content))
         self.end_headers()
         self.wfile.write(content)
+
+    def _serve_serial_log(self, lines: int):
+        try:
+            r = subprocess.run(["tail", f"-{lines}", SERIAL_LOG_FILE],
+                               capture_output=True, text=True, errors="replace")
+            available = os.path.isfile(SERIAL_LOG_FILE)
+            self._send_json({"available": available, "lines": r.stdout.splitlines()})
+        except Exception:
+            self._send_json({"available": False, "lines": []})
 
     def _serve_logs(self, log_type: str, lines: int):
         if log_type not in ("capture", "compile"):

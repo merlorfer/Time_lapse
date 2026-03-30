@@ -107,8 +107,7 @@
 
     // ── 3. Poll /api/ble-status – sync window.bleConnected ───────────────────
 
-    let _lastBleOk      = null;
-    let _serialAvailable = false;
+    let _lastBleOk = null;
 
     async function updateProxyStatus() {
         let bleOk = false;
@@ -134,111 +133,9 @@
             if (typeof loadDevices === 'function') loadDevices();
         }
 
-        const dot = document.getElementById('serial-btn-dot');
-        if (dot) dot.style.background = _serialAvailable ? '#a6e3a1' : '#f38ba8';
     }
 
-    // ── 4. Serial log drawer ──────────────────────────────────────────────────
-
-    let _serialSince = 0;
-    let _serialPaused = false;
-    let _drawerOpen   = false;
-
-    function injectSerialButton() {
-        const actions = document.querySelector('.ble-actions');
-        if (!actions) return;
-        const btn = document.createElement('button');
-        btn.id = 'serial-log-btn';
-        btn.className = 'btn btn-secondary btn-small';
-        btn.style.cssText = 'display:flex;align-items:center;gap:5px;';
-        btn.innerHTML =
-            '<span id="serial-btn-dot" style="width:7px;height:7px;border-radius:50%;background:#555;display:inline-block;flex-shrink:0;"></span>' +
-            'Soros log';
-        btn.addEventListener('click', toggleDrawer);
-        actions.appendChild(btn);
-    }
-
-    function injectSerialDrawer() {
-        const drawer = document.createElement('div');
-        drawer.id = 'serial-drawer';
-        drawer.style.cssText =
-            'position:fixed;top:48px;right:0;width:520px;max-width:100vw;' +
-            'height:calc(100vh - 48px);z-index:9990;display:none;flex-direction:column;' +
-            'background:#11111b;border-left:2px solid #313244;box-shadow:-4px 0 20px #0009;';
-        drawer.innerHTML = `
-            <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;
-                        background:#1e1e2e;border-bottom:1px solid #313244;flex-shrink:0;">
-              <span id="serial-drawer-dot" style="width:8px;height:8px;border-radius:50%;
-                    background:#555;display:inline-block;flex-shrink:0;"></span>
-              <span style="font-size:13px;font-weight:600;color:#cdd6f4;flex:1;">Soros port log &mdash; /dev/ttyACM0</span>
-              <button id="serial-pause-btn" style="font-size:11px;padding:2px 8px;background:#313244;color:#cdd6f4;border:1px solid #555;border-radius:4px;cursor:pointer;">Szünet</button>
-              <button id="serial-clear-btn" style="font-size:11px;padding:2px 8px;background:#313244;color:#cdd6f4;border:1px solid #555;border-radius:4px;cursor:pointer;">Törlés</button>
-              <button id="serial-close-btn" style="font-size:13px;padding:2px 8px;background:transparent;color:#888;border:none;cursor:pointer;">✕</button>
-            </div>
-            <div id="serial-log-body" style="flex:1;overflow-y:auto;font-family:monospace;font-size:12px;color:#a6e3a1;padding:6px 12px;box-sizing:border-box;"></div>`;
-        document.body.appendChild(drawer);
-
-        document.getElementById('serial-close-btn').addEventListener('click', toggleDrawer);
-        document.getElementById('serial-pause-btn').addEventListener('click', function () {
-            _serialPaused = !_serialPaused;
-            this.textContent = _serialPaused ? 'Folytatás' : 'Szünet';
-            this.style.color = _serialPaused ? '#f38ba8' : '#cdd6f4';
-        });
-        document.getElementById('serial-clear-btn').addEventListener('click', function () {
-            document.getElementById('serial-log-body').innerHTML = '';
-        });
-    }
-
-    function toggleDrawer() {
-        _drawerOpen = !_drawerOpen;
-        const drawer = document.getElementById('serial-drawer');
-        if (drawer) drawer.style.display = _drawerOpen ? 'flex' : 'none';
-        const btn = document.getElementById('serial-log-btn');
-        if (btn) btn.style.outline = _drawerOpen ? '2px solid #89dceb' : 'none';
-    }
-
-    function _colorize(msg) {
-        if (/\bE\b|\bERROR\b|error|Error/.test(msg))              return '#f38ba8';
-        if (/\bW\b|\bWARN\b|warn/.test(msg))                      return '#fab387';
-        if (/\bI\b|\bINFO\b|\[BLE\]|\[HTTP\]|\[SERIAL\]/.test(msg)) return '#89dceb';
-        if (/\bD\b|\bDEBUG\b/.test(msg))                          return '#6c7086';
-        return '#a6e3a1';
-    }
-
-    async function pollSerialLogs() {
-        if (_serialPaused) return;
-        try {
-            const r = await fetch('/api/serial-logs?since=' + _serialSince);
-            if (!r.ok) return;
-            const d = await r.json();
-            _serialAvailable = d.available;
-            const color = d.available ? '#a6e3a1' : '#f38ba8';
-            ['serial-btn-dot', 'serial-drawer-dot'].forEach(id => {
-                const el = document.getElementById(id);
-                if (el) el.style.background = color;
-            });
-            if (!d.lines || d.lines.length === 0) return;
-            _serialSince = d.total;
-            if (!_drawerOpen) return;
-            const body = document.getElementById('serial-log-body');
-            if (!body) return;
-            const atBottom = body.scrollHeight - body.scrollTop <= body.clientHeight + 40;
-            d.lines.forEach(function (entry) {
-                const line = document.createElement('div');
-                line.style.cssText = 'padding:1px 0;border-bottom:1px solid #1a1a2a;white-space:pre-wrap;word-break:break-all;';
-                line.innerHTML =
-                    '<span style="color:#6c7086;">' + entry.t + '</span> ' +
-                    '<span style="color:' + _colorize(entry.msg) + ';">' +
-                    entry.msg.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') +
-                    '</span>';
-                body.appendChild(line);
-                while (body.children.length > 300) body.removeChild(body.firstChild);
-            });
-            if (atBottom) body.scrollTop = body.scrollHeight;
-        } catch (_) {}
-    }
-
-    // ── 5. Sensor config section ──────────────────────────────────────────────
+    // ── 4. Sensor config section ──────────────────────────────────────────────
 
     let _sensorConfig = {};
 
@@ -373,12 +270,9 @@
 
     document.addEventListener('DOMContentLoaded', function () {
         injectBleButtons();
-        injectSerialButton();
-        injectSerialDrawer();
         injectSensorSection();
         updateProxyStatus();
         setInterval(updateProxyStatus, 5000);
-        setInterval(pollSerialLogs, 2000);
         setInterval(loadSensorConfig, 30000);
     });
 

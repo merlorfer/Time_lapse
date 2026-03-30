@@ -44,6 +44,8 @@ main { max-width: 1100px; margin: 0 auto; padding: 20px; display: flex; flex-dir
 /* ── Preview ── */
 .preview-wrap { position: relative; background: #000; border-radius: 8px; overflow: hidden; aspect-ratio: 4/3; max-height: 360px; display: flex; align-items: center; justify-content: center; }
 .preview-wrap img { width: 100%; height: 100%; object-fit: contain; }
+.preview-wrap:-webkit-full-screen { max-height: 100vh; aspect-ratio: unset; border-radius: 0; }
+.preview-wrap:fullscreen { max-height: 100vh; aspect-ratio: unset; border-radius: 0; }
 .preview-off { color: var(--muted); font-size: 13px; text-align: center; }
 .preview-off span { font-size: 32px; display: block; margin-bottom: 8px; }
 
@@ -154,8 +156,13 @@ button:disabled { opacity: .35; cursor: not-allowed; }
 
     <!-- Camera preview -->
     <div class="card">
-      <div class="card-title">Kamera preview</div>
-      <div class="preview-wrap" id="preview-wrap">
+      <div class="card-title">Kamera preview
+        <button id="fullscreen-btn" onclick="togglePreviewFullscreen()"
+          style="float:right;padding:3px 8px;font-size:11px;background:var(--card);
+                 border:1px solid var(--border);border-radius:5px;color:var(--muted);cursor:pointer;"
+          title="Teljes képernyő">⛶</button>
+      </div>
+      <div class="preview-wrap" id="preview-wrap" ondblclick="togglePreviewFullscreen()" style="cursor:pointer;">
         <div class="preview-off" id="preview-off">
           <span>📷</span>Preview nem aktív
         </div>
@@ -242,17 +249,33 @@ button:disabled { opacity: .35; cursor: not-allowed; }
   <!-- Log viewer -->
   <div class="card">
     <div class="card-title">Logok</div>
-    <div class="log-controls">
-      <select id="log-type" onchange="loadLog()">
-        <option value="capture">capture.log</option>
-        <option value="compile">compile.log</option>
-      </select>
-      <input type="number" id="log-lines" value="100" min="10" max="500" style="width:80px" onchange="loadLog()">
-      <span style="color:var(--muted);font-size:12px">sor</span>
-      <button class="btn-gray" onclick="loadLog()">↻ Frissítés</button>
-      <button class="btn-gray" onclick="toggleAutoLog()" id="auto-log-btn">⏱ Auto OFF</button>
+    <div class="tabs" style="margin-top:12px">
+      <button class="tab active" onclick="switchLogTab('timelapse')">📋 Timelapse</button>
+      <button class="tab"        onclick="switchLogTab('esp32')">🖥 ESP32</button>
     </div>
-    <div class="log-box" id="log-box"><span style="color:var(--muted)">Betöltés...</span></div>
+    <div id="logtab-timelapse" class="tab-panel active">
+      <div class="log-controls">
+        <select id="log-type" onchange="loadLog()">
+          <option value="capture">capture.log</option>
+          <option value="compile">compile.log</option>
+        </select>
+        <input type="number" id="log-lines" value="100" min="10" max="500" style="width:80px" onchange="loadLog()">
+        <span style="color:var(--muted);font-size:12px">sor</span>
+        <button class="btn-gray" onclick="loadLog()">↻ Frissítés</button>
+        <button class="btn-gray" onclick="toggleAutoLog()" id="auto-log-btn">⏱ Auto OFF</button>
+      </div>
+      <div class="log-box" id="log-box"><span style="color:var(--muted)">Betöltés...</span></div>
+    </div>
+    <div id="logtab-esp32" class="tab-panel">
+      <div class="log-controls">
+        <span id="serial-status-dot" style="width:8px;height:8px;border-radius:50%;background:#555;display:inline-block;flex-shrink:0;"></span>
+        <span id="serial-status-txt" style="font-size:12px;color:var(--muted);">/dev/ttyACM0</span>
+        <button class="btn-gray" onclick="loadSerialLog()">↻ Frissítés</button>
+        <button class="btn-gray" onclick="toggleAutoSerial()" id="auto-serial-btn">⏱ Auto OFF</button>
+        <button class="btn-gray" onclick="document.getElementById('serial-log-box').innerHTML=''">Törlés</button>
+      </div>
+      <div id="serial-log-box" class="log-box" style="color:#a6e3a1;"><span style="color:var(--muted)">Betöltés...</span></div>
+    </div>
   </div>
 
 </main>
@@ -322,6 +345,8 @@ button:disabled { opacity: .35; cursor: not-allowed; }
 let statusInterval = null;
 let logInterval    = null;
 let autoLog        = false;
+let serialInterval = null;
+let autoSerial     = false;
 let running        = false;
 
 // ── Init ────────────────────────────────────────────────────────────────────
@@ -497,6 +522,15 @@ function switchTab(name) {
   event.target.classList.add('active');
 }
 
+function switchLogTab(name) {
+  const card = document.getElementById('logtab-timelapse').closest('.card');
+  card.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  card.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById(`logtab-${name}`).classList.add('active');
+  event.target.classList.add('active');
+  if (name === 'esp32') loadSerialLog();
+}
+
 function playVideo(path, title) {
   const url = `http://${location.hostname}:8080/${path}`;
   document.getElementById('player-title').textContent = title;
@@ -561,6 +595,64 @@ function toggleAutoLog() {
     btn.textContent = '⏱ Auto OFF';
     btn.className   = 'btn-gray';
     clearInterval(logInterval);
+  }
+}
+
+// ── Preview fullscreen ───────────────────────────────────────────────────────
+function togglePreviewFullscreen() {
+  const wrap = document.getElementById('preview-wrap');
+  if (!document.fullscreenElement) {
+    wrap.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen();
+  }
+}
+document.addEventListener('fullscreenchange', () => {
+  const btn = document.getElementById('fullscreen-btn');
+  if (btn) btn.textContent = document.fullscreenElement ? '✕' : '⛶';
+});
+
+// ── ESP32 serial log ─────────────────────────────────────────────────────────
+function _serialColor(line) {
+  if (/\bE\b|\bERROR\b|error/.test(line)) return 'var(--red)';
+  if (/\bW\b|\bWARN\b|warn/.test(line))   return 'var(--yellow)';
+  if (/\bI\b|\bINFO\b/.test(line))        return '#89dceb';
+  return '#a6e3a1';
+}
+
+async function loadSerialLog() {
+  const box = document.getElementById('serial-log-box');
+  if (!box) return;
+  try {
+    const d = await api('/api/serial-log?lines=300');
+    const dot = document.getElementById('serial-status-dot');
+    const txt = document.getElementById('serial-status-txt');
+    if (dot) dot.style.background = d.available ? '#a6e3a1' : '#f38ba8';
+    if (txt) txt.textContent = d.available ? '/dev/ttyACM0 — aktív' : '/dev/ttyACM0 — nem elérhető';
+    if (!d.lines || d.lines.length === 0) return;
+    box.innerHTML = d.lines.map(l =>
+      `<div class="log-line" style="color:${_serialColor(l)}">${escHtml(l)}</div>`
+    ).join('');
+    box.scrollTop = box.scrollHeight;
+  } catch (e) {}
+}
+
+function startSerialLog() {
+  loadSerialLog();
+  if (!autoSerial) return;
+}
+
+function toggleAutoSerial() {
+  autoSerial = !autoSerial;
+  const btn = document.getElementById('auto-serial-btn');
+  if (autoSerial) {
+    btn.textContent = '⏱ Auto ON';
+    btn.className   = 'btn-green';
+    serialInterval = setInterval(loadSerialLog, 3000);
+  } else {
+    btn.textContent = '⏱ Auto OFF';
+    btn.className   = 'btn-gray';
+    clearInterval(serialInterval);
   }
 }
 
@@ -638,7 +730,7 @@ async function loadSensorChart() {
     rows.forEach(r => { byTs[r.timestamp] = r; });
 
     // Determine what fields this sensor has
-    const sample = rows[0] || {};
+    const sample = rows.find(r => r.temperature !== '' || r.humidity !== '' || r.water_level !== '') || {};
     const fields = [];
     if (sample.temperature !== undefined && sample.temperature !== '') fields.push('temperature');
     if (sample.humidity    !== undefined && sample.humidity    !== '') fields.push('humidity');
