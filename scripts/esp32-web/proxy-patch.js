@@ -15,8 +15,22 @@
 
     // ── 1. Always route via HTTP ──────────────────────────────────────────────
 
+    let _pendingRequests = 0;
+
+    function _setBusy(busy) {
+        const el = document.getElementById('proxy-busy-dot');
+        if (el) el.style.opacity = busy ? '1' : '0';
+    }
+
     window.apiRequest = async function (endpoint, method = 'GET', body = null) {
-        return await httpRequest(endpoint, method, body);
+        _pendingRequests++;
+        _setBusy(true);
+        try {
+            return await httpRequest(endpoint, method, body);
+        } finally {
+            _pendingRequests--;
+            if (_pendingRequests <= 0) { _pendingRequests = 0; _setBusy(false); }
+        }
     };
 
     window.connectBLE    = function () {};
@@ -103,17 +117,35 @@
         actions.appendChild(status);
         actions.appendChild(connectBtn);
         actions.appendChild(disconnectBtn);
+
+        // Busy indicator
+        const busy = document.createElement('span');
+        busy.id = 'proxy-busy-dot';
+        busy.title = 'Adatforgalom folyamatban…';
+        busy.style.cssText =
+            'width:8px;height:8px;border-radius:50%;background:#89dceb;display:inline-block;' +
+            'flex-shrink:0;opacity:0;transition:opacity 0.2s;' +
+            'animation:proxy-pulse 0.8s ease-in-out infinite;';
+        const style = document.createElement('style');
+        style.textContent = '@keyframes proxy-pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.5)}}';
+        document.head.appendChild(style);
+        actions.appendChild(busy);
     }
 
     // ── 3. Poll /api/ble-status – sync window.bleConnected ───────────────────
 
     let _lastBleOk = null;
+    let _lastTransport = null;
 
     async function updateProxyStatus() {
-        let bleOk = false;
+        let bleOk = false, transport = 'none';
         try {
             const r = await fetch('/api/ble-status');
-            if (r.ok) bleOk = (await r.json()).connected === true;
+            if (r.ok) {
+                const d = await r.json();
+                bleOk     = d.connected === true || d.serial === true;
+                transport = d.transport || 'none';
+            }
         } catch (_) {}
 
         // Set the global var — script.js reads this directly in every check
@@ -121,18 +153,20 @@
 
         _setBleButtonState(bleOk ? 'connected' : 'disconnected');
 
-        // Update the sticky header + "Bluetooth Kapcsolat" section immediately
+        // Update the sticky header + "Bluetooth Kapcsolat" section
         if (typeof updateBLEStatus === 'function') {
-            updateBLEStatus(bleOk, bleOk ? 'Csatlakozva' : 'Nincs csatlakozva');
+            const label = transport === 'serial' ? 'USB Serial'
+                        : transport === 'ble'    ? 'BLE'
+                        : 'Nincs csatlakozva';
+            updateBLEStatus(bleOk, bleOk ? ('Csatlakozva (' + label + ')') : 'Nincs csatlakozva');
         }
 
-        if (_lastBleOk !== bleOk) {
-            _lastBleOk = bleOk;
-            // Reload UI so all conditional renders (canControl, canPair, status text) update
+        if (_lastBleOk !== bleOk || _lastTransport !== transport) {
+            _lastBleOk     = bleOk;
+            _lastTransport = transport;
             if (typeof loadStatus  === 'function') loadStatus();
             if (typeof loadDevices === 'function') loadDevices();
         }
-
     }
 
     // ── 4. Sensor config section ──────────────────────────────────────────────

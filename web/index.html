@@ -273,6 +273,10 @@ button:disabled { opacity: .35; cursor: not-allowed; }
         <button class="btn-gray" onclick="loadSerialLog()">↻ Frissítés</button>
         <button class="btn-gray" onclick="toggleAutoSerial()" id="auto-serial-btn">⏱ Auto OFF</button>
         <button class="btn-gray" onclick="document.getElementById('serial-log-box').innerHTML=''">Törlés</button>
+        <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);cursor:pointer;user-select:none;">
+          <input type="checkbox" id="serial-hide-traffic" onchange="loadSerialLog()" style="cursor:pointer;">
+          Adatforgalom elrejtése
+        </label>
       </div>
       <div id="serial-log-box" class="log-box" style="color:#a6e3a1;"><span style="color:var(--muted)">Betöltés...</span></div>
     </div>
@@ -630,7 +634,11 @@ async function loadSerialLog() {
     if (dot) dot.style.background = d.available ? '#a6e3a1' : '#f38ba8';
     if (txt) txt.textContent = d.available ? '/dev/ttyACM0 — aktív' : '/dev/ttyACM0 — nem elérhető';
     if (!d.lines || d.lines.length === 0) return;
-    box.innerHTML = d.lines.map(l =>
+    const hideTraffic = document.getElementById('serial-hide-traffic')?.checked;
+    const lines = hideTraffic
+      ? d.lines.filter(l => !l.trimStart().startsWith('>>>') && !l.includes('"cmd":'))
+      : d.lines;
+    box.innerHTML = lines.map(l =>
       `<div class="log-line" style="color:${_serialColor(l)}">${escHtml(l)}</div>`
     ).join('');
     box.scrollTop = box.scrollHeight;

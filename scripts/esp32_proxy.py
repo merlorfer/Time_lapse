@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-esp32_proxy.py – ESP32C6 BLE Proxy
-Serves the ESP32C6 web UI on :8082 and proxies /api/* calls via BLE GATT.
+esp32_proxy.py – ESP32C6 Proxy (USB serial preferred, BLE fallback)
+Serves the ESP32C6 web UI on :8083 and proxies /api/* calls via USB serial
+(screen session) or BLE GATT when USB is not available.
 
 Requires: pip3 install bleak
 """
@@ -14,9 +15,11 @@ import os
 import re
 import signal
 import shutil
+import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
 from urllib.parse import urlparse, parse_qs
 
 from bleak import BleakClient, BleakScanner
@@ -33,6 +36,8 @@ HTTP_PORT         = 8083
 SERIAL_PORT       = "/dev/ttyACM0"
 SERIAL_BAUD       = 115200
 SERIAL_BUF_LINES  = 500
+SCREEN_SESSION    = "esp32serial"
+SERIAL_CMD_TIMEOUT = 15.0  # seconds to wait for >>> response
 
 SENSOR_CONFIG_FILE = "/home/orangepi/esp32/sensor_config.json"
 SENSOR_DATA_DIR    = "/tmp/sensor_data"
@@ -86,6 +91,84 @@ def _serial_reader_thread():
             _serial_available = False
             print(f"[SERIAL] {exc} – retry in 3 s")
             time.sleep(3)
+
+
+# =============================================================================
+# USB serial command interface  (via screen session, >>> response protocol)
+# =============================================================================
+
+_serial_cmd_lock = threading.Lock()   # only one command at a time
+
+
+def _get_screen_id() -> str | None:
+    """Return the full screen session ID (e.g. '289778.esp32serial') or None."""
+    r = subprocess.run(["screen", "-ls"], capture_output=True, text=True)
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if SCREEN_SESSION in line and ("(Detached)" in line or "(Attached)" in line):
+            return line.split()[0]
+    return None
+
+
+def _screen_running() -> bool:
+    return _get_screen_id() is not None
+
+
+def serial_call(cmd: str, params: dict, timeout: float = SERIAL_CMD_TIMEOUT) -> dict:
+    """Send a JSON command via the screen session and parse the >>> response."""
+    session_id = _get_screen_id()
+    if not session_id:
+        raise ConnectionError("screen session not found")
+
+    payload = json.dumps({"cmd": cmd, "params": params} if params else {"cmd": cmd})
+
+    with _serial_cmd_lock:
+        # Mark position in log file before sending
+        try:
+            log_pos = os.path.getsize(SERIAL_LOG_FILE)
+        except OSError:
+            log_pos = 0
+
+        # Send command via temp file + readreg/paste (handles large payloads)
+        tmp = f"/tmp/_esp32_cmd_{os.getpid()}.txt"
+        with open(tmp, "w") as f:
+            f.write(payload + "\n")
+        subprocess.run(["screen", "-S", session_id, "-p", "0", "-X",
+                        "readreg", "p", tmp], capture_output=True)
+        subprocess.run(["screen", "-S", session_id, "-p", "0", "-X",
+                        "paste", "p"], capture_output=True)
+        os.unlink(tmp)
+        print(f"[SERIAL] → {payload[:80]}")
+
+        # Wait for >>> response to appear in the log file
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                with open(SERIAL_LOG_FILE, "rb") as f:
+                    f.seek(log_pos)
+                    new_data = _ANSI.sub(b"", f.read()).decode("utf-8", errors="replace")
+                for line in new_data.splitlines():
+                    line = line.strip()
+                    if line.startswith(">>>") and "{" in line:
+                        raw = line[line.index("{"):]
+                        print(f"[SERIAL] ← {line[:120]}")
+                        try:
+                            return json.loads(raw)
+                        except json.JSONDecodeError as je:
+                            print(f"[SERIAL] JSON parse error: {je} | raw={raw[:200]}")
+                            raise
+            except Exception:
+                pass
+            time.sleep(0.1)
+
+    raise TimeoutError(f"No serial response for cmd={cmd} within {timeout}s")
+
+
+def device_call(cmd: str, params: dict) -> dict:
+    """Send command via serial if available, fall back to BLE."""
+    if _serial_available and _screen_running():
+        return serial_call(cmd, params)
+    return ble_call(cmd, params)
 
 
 # =============================================================================
@@ -307,29 +390,32 @@ def _save_reading(dev: dict, ts: str, date: str):
 
 
 def _collect_now(to_collect: list):
-    """BLE connect → get_devices → save readings → disconnect. Max 2 attempts."""
-    success = False
-    for attempt in range(2):
-        if _ble_connect_sync():
-            success = True
-            break
-        if attempt == 0:
-            print("[SENSOR] Attempt 1 failed, retrying in 10 s…")
-            time.sleep(10)
+    """Collect sensor readings via serial (preferred) or BLE."""
+    use_serial = _serial_available and _screen_running()
 
-    if not success:
-        with _sensor_cfg_lock:
-            for ieee in to_collect:
-                rt = _get_runtime(ieee)
-                rt["consecutive_failures"] += 1
-                if rt["consecutive_failures"] >= 3:
-                    rt["suspended"]    = True
-                    rt["suspended_at"] = time.time()
-                    print(f"[SENSOR] {ieee} suspended after 3 consecutive failures")
-        return
+    if not use_serial:
+        # BLE path: connect first (max 2 attempts)
+        success = False
+        for attempt in range(2):
+            if _ble_connect_sync():
+                success = True
+                break
+            if attempt == 0:
+                print("[SENSOR] Attempt 1 failed, retrying in 10 s…")
+                time.sleep(10)
+        if not success:
+            with _sensor_cfg_lock:
+                for ieee in to_collect:
+                    rt = _get_runtime(ieee)
+                    rt["consecutive_failures"] += 1
+                    if rt["consecutive_failures"] >= 3:
+                        rt["suspended"]    = True
+                        rt["suspended_at"] = time.time()
+                        print(f"[SENSOR] {ieee} suspended after 3 consecutive failures")
+            return
 
     try:
-        data    = ble_call("get_devices", {})
+        data    = device_call("get_devices", {})
         devices = data.get("devices", [])
         ts      = time.strftime("%Y-%m-%d %H:%M:%S")
         date    = time.strftime("%Y-%m-%d")
@@ -346,8 +432,18 @@ def _collect_now(to_collect: list):
                 rt["last_ok"]              = ts
     except Exception as exc:
         print(f"[SENSOR] Collection error: {exc}")
+        if not use_serial:
+            with _sensor_cfg_lock:
+                for ieee in to_collect:
+                    rt = _get_runtime(ieee)
+                    rt["consecutive_failures"] += 1
+                    if rt["consecutive_failures"] >= 3:
+                        rt["suspended"]    = True
+                        rt["suspended_at"] = time.time()
+                        print(f"[SENSOR] {ieee} suspended after 3 consecutive failures")
     finally:
-        _ble_disconnect_sync()
+        if not use_serial:
+            _ble_disconnect_sync()
 
 
 def _sensor_scheduler():
@@ -380,12 +476,6 @@ def _sensor_scheduler():
 # =============================================================================
 # Sync BLE wrapper (called from HTTP handler threads)
 # =============================================================================
-
-def ble_call(cmd: str, params: dict) -> dict:
-    async def _locked():
-        async with _lock:
-            return await _send(cmd, params)
-    return asyncio.run_coroutine_threadsafe(_locked(), _loop).result(timeout=20)
 
 def ble_call(cmd: str, params: dict) -> dict:
     async def _locked():
@@ -520,17 +610,23 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "unknown endpoint", "path": path})
             return
 
-        if not connected:
-            self._send_json(503, {"error": "BLE not connected", "status": "disconnected"})
+        serial_ok = _serial_available and _screen_running()
+        if not serial_ok and not connected:
+            self._send_json(503, {"error": "Not connected", "status": "disconnected"})
             return
 
         try:
-            self._send_json(200, ble_call(cmd, params))
+            result = device_call(cmd, params)
+            # Normalize: serial returns {status:"ok"}, JS expects {ok:true} or {success:true}
+            if result.get("status") == "ok" and "ok" not in result and "success" not in result:
+                result["ok"] = True
+            self._send_json(200, result)
         except ConnectionError as exc:
             self._send_json(503, {"error": str(exc)})
         except TimeoutError:
-            self._send_json(504, {"error": "BLE command timeout"})
+            self._send_json(504, {"error": "Command timeout"})
         except Exception as exc:
+            print(f"[HTTP] ERROR cmd={cmd}: {exc}")
             self._send_json(500, {"error": str(exc)})
 
     # ── static files ──────────────────────────────────────────────────────────
@@ -565,7 +661,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/api/ble-status":
-            self._send_json(200, {"connected": connected})
+            serial_ok = _serial_available and _screen_running()
+            self._send_json(200, {
+                "connected": connected,
+                "serial": serial_ok,
+                "transport": "serial" if serial_ok else ("ble" if connected else "none"),
+            })
         elif self.path == "/api/sensor-config":
             with _sensor_cfg_lock:
                 cfg_copy = dict(_sensor_config)
@@ -654,8 +755,9 @@ if __name__ == "__main__":
     print(f"[HTTP] ESP32C6 proxy on :{HTTP_PORT}")
     print(f"[HTTP] Web files: {WEB_DIR}")
 
-    class ReusableHTTPServer(HTTPServer):
+    class ReusableHTTPServer(ThreadingMixIn, HTTPServer):
         allow_reuse_address = True
+        daemon_threads = True
 
     try:
         ReusableHTTPServer(("0.0.0.0", HTTP_PORT), Handler).serve_forever()
