@@ -12,6 +12,7 @@ import collections
 import csv
 import json
 import os
+import queue
 import re
 import signal
 import shutil
@@ -81,6 +82,8 @@ def _serial_reader_thread():
                             if text:
                                 with _serial_lock:
                                     _serial_buf.append({"t": time.strftime("%H:%M:%S"), "msg": text})
+                                if _SENSOR_DATA_RE.search(text):
+                                    _sensor_event_q.put(time.time())
                     else:
                         # Check file still exists (screen may restart)
                         if not os.path.exists(SERIAL_LOG_FILE):
@@ -301,6 +304,9 @@ def _start_ble_thread():
 _sensor_config: dict = {}       # {ieee_addr: {enabled, interval_min}}
 _sensor_runtime: dict = {}      # {ieee_addr: {consecutive_failures, suspended, last_ok}}
 _sensor_cfg_lock = threading.Lock()
+_last_sensor_values: dict = {}  # {ieee_addr: row_dict} – last saved reading (serial mode change detection)
+_sensor_event_q: queue.SimpleQueue = queue.SimpleQueue()  # fires when serial log shows a sensor report
+_SENSOR_DATA_RE = re.compile(r'SCHEDULER_TASK.*sensor data:', re.IGNORECASE)
 
 
 def _load_sensor_config():
@@ -374,13 +380,22 @@ def _extract_reading(dev: dict) -> dict:
     return row
 
 
-def _save_reading(dev: dict, ts: str, date: str):
-    name = (dev.get("custom_name") or dev["ieee_addr"].replace("0x", "")).replace("/", "_")
+def _save_reading(dev: dict, ts: str, date: str, check_changed: bool = False):
+    ieee = dev["ieee_addr"]
+    name = (dev.get("custom_name") or ieee.replace("0x", "")).replace("/", "_")
     day_dir = os.path.join(SENSOR_DATA_DIR, date)
     os.makedirs(day_dir, exist_ok=True)
     filepath = os.path.join(day_dir, f"{name}.csv")
+    reading = _extract_reading(dev)
+    if check_changed:
+        prev = _last_sensor_values.get(ieee)
+        # Compare only the measurement fields (ignore timestamp and error)
+        measure_keys = [k for k in reading if k not in ("error",)]
+        if prev and all(str(reading.get(k, "")) == str(prev.get(k, "")) for k in measure_keys):
+            return  # value unchanged – skip
+    _last_sensor_values[ieee] = reading
     row = {"timestamp": ts}
-    row.update(_extract_reading(dev))
+    row.update(reading)
     write_header = not os.path.isfile(filepath)
     with open(filepath, "a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction="ignore")
@@ -389,7 +404,7 @@ def _save_reading(dev: dict, ts: str, date: str):
         writer.writerow({k: row.get(k, "") for k in CSV_FIELDS})
 
 
-def _collect_now(to_collect: list):
+def _collect_now(to_collect: list, check_changed: bool = False):
     """Collect sensor readings via serial (preferred) or BLE."""
     use_serial = _serial_available and _screen_running()
 
@@ -423,7 +438,7 @@ def _collect_now(to_collect: list):
             ieee = dev["ieee_addr"]
             if ieee not in to_collect:
                 continue
-            _save_reading(dev, ts, date)
+            _save_reading(dev, ts, date, check_changed=check_changed)
             print(f"[SENSOR] Saved reading for {dev.get('custom_name', ieee)}")
             with _sensor_cfg_lock:
                 rt = _get_runtime(ieee)
@@ -446,9 +461,38 @@ def _collect_now(to_collect: list):
             _ble_disconnect_sync()
 
 
-def _sensor_scheduler():
-    """Wakes every minute, collects data for enabled sensors whose interval is due."""
+def _serial_sensor_watcher():
+    """In serial mode: watches for zigbee sensor report events and records only changed values."""
     while True:
+        try:
+            _sensor_event_q.get(timeout=5)
+        except Exception:
+            continue
+        if not (_serial_available and _screen_running()):
+            continue
+        # Debounce: drain any extra events that arrived in the same burst
+        time.sleep(0.3)
+        try:
+            while True:
+                _sensor_event_q.get_nowait()
+        except Exception:
+            pass
+        with _sensor_cfg_lock:
+            to_collect = [
+                ieee for ieee, cfg in _sensor_config.items()
+                if cfg.get("enabled") and not _get_runtime(ieee).get("suspended")
+            ]
+        if to_collect:
+            threading.Thread(
+                target=_collect_now, args=(to_collect,), kwargs={"check_changed": True},
+                daemon=True).start()
+
+
+def _sensor_scheduler():
+    """Wakes every minute: BLE interval polling + suspension auto-lift.
+    In serial mode polling is skipped (handled by _serial_sensor_watcher)."""
+    while True:
+        use_serial = _serial_available and _screen_running()
         now_min = time.localtime().tm_hour * 60 + time.localtime().tm_min
         to_collect = []
         with _sensor_cfg_lock:
@@ -464,9 +508,11 @@ def _sensor_scheduler():
                         print(f"[SENSOR] {ieee} suspension lifted after {SENSOR_SUSPEND_MINUTES} min")
                     else:
                         continue
-                interval = max(1, cfg.get("interval_min", 60))
-                if now_min % interval == 0:
-                    to_collect.append(ieee)
+                # BLE mode only: poll at configured interval
+                if not use_serial:
+                    interval = max(1, cfg.get("interval_min", 60))
+                    if now_min % interval == 0:
+                        to_collect.append(ieee)
         if to_collect:
             threading.Thread(target=_collect_now, args=(to_collect,), daemon=True).start()
         # Sleep until next minute boundary
@@ -750,6 +796,7 @@ if __name__ == "__main__":
     threading.Thread(target=_start_ble_thread, daemon=True).start()
     threading.Thread(target=_serial_reader_thread, daemon=True).start()
     threading.Thread(target=_sensor_scheduler, daemon=True).start()
+    threading.Thread(target=_serial_sensor_watcher, daemon=True).start()
     _ready.wait()
 
     print(f"[HTTP] ESP32C6 proxy on :{HTTP_PORT}")

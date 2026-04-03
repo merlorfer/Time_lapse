@@ -70,6 +70,32 @@ Böngészőben: **http://192.168.68.177:8080/**
 
 ---
 
+## Pendrive biztonságos ki- és visszadugása
+
+Nap közben a rendszer mindent a ramdiskre rögzít (`/tmp/timelapse_frames`, `/tmp/sensor_data`), így a pendrive bármikor kiszedható – a felvételek nem szakadnak meg.
+
+**Kiszedés előtt** – biztonságos leválasztás:
+```bash
+sudo umount /mnt/timelapse
+```
+
+Ha "target is busy" hibát ír (pl. épp compile fut):
+```bash
+sudo lsof /mnt/timelapse   # mi tartja nyitva
+```
+Várj, amíg a folyamat véget ér, majd próbáld újra. Ezután a pendrive fizikailag kihúzható.
+
+**Visszadugás után** – újramountolás:
+```bash
+sudo mount /mnt/timelapse
+```
+
+A rendszer automatikusan érzékeli: ha `/mnt/timelapse` mountolva és írható, azt használja; ha nincs, az SD kártyára ment. Visszadugás után az éjféli compile és a szenzor backup ismét a pendrive-ra kerül.
+
+> Alternatíva: használd az interaktív `storage_select.sh` scriptet (lásd lentebb).
+
+---
+
 ## Tárhely átváltása (ha pendrive nem volt bent bootoláskor)
 
 ```bash
