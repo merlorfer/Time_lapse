@@ -53,14 +53,27 @@ def build_args(script: str, params: dict) -> list[str]:
 
 # ── Video base helper ────────────────────────────────────────────────────────
 def get_video_base() -> str:
-    r = subprocess.run(
-        ["bash", "-c",
-         "source /home/orangepi/timelapse/scripts/config.sh; "
-         "[ -f /tmp/timelapse_session.conf ] && source /tmp/timelapse_session.conf; "
-         "echo $VIDEO_BASE"],
-        capture_output=True, text=True
-    )
-    return r.stdout.strip() or "/home/orangepi/timelapse/videos"
+    # Check session override first
+    session_conf = "/tmp/timelapse_session.conf"
+    if os.path.isfile(session_conf):
+        with open(session_conf) as f:
+            for line in f:
+                if line.startswith("VIDEO_BASE="):
+                    val = line.strip().split("=", 1)[1].strip('"\'')
+                    if val:
+                        return val
+    # Auto-detect: USB pendrive preferred, SD fallback
+    usb = "/mnt/timelapse"
+    if os.path.ismount(usb) and os.path.isdir(usb):
+        try:
+            testfile = os.path.join(usb, ".write_test")
+            with open(testfile, "w") as f:
+                f.write("x")
+            os.unlink(testfile)
+            return usb
+        except OSError:
+            pass
+    return "/home/orangepi/timelapse/videos"
 
 def get_videos() -> dict:
     video_base   = get_video_base()
