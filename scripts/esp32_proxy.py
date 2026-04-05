@@ -462,7 +462,9 @@ def _collect_now(to_collect: list, check_changed: bool = False):
 
 
 def _serial_sensor_watcher():
-    """In serial mode: watches for zigbee sensor report events and records only changed values."""
+    """In serial mode: watches for zigbee sensor report events and records only changed values.
+    Minimum interval between collects: sensor's interval_min (default 60s)."""
+    _last_collect: dict = {}  # {ieee: timestamp}
     while True:
         try:
             _sensor_event_q.get(timeout=5)
@@ -477,12 +479,18 @@ def _serial_sensor_watcher():
                 _sensor_event_q.get_nowait()
         except Exception:
             pass
+        now = time.time()
         with _sensor_cfg_lock:
-            to_collect = [
-                ieee for ieee, cfg in _sensor_config.items()
-                if cfg.get("enabled") and not _get_runtime(ieee).get("suspended")
-            ]
+            to_collect = []
+            for ieee, cfg in _sensor_config.items():
+                if not cfg.get("enabled") or _get_runtime(ieee).get("suspended"):
+                    continue
+                min_interval = max(1, cfg.get("interval_min", 60)) * 60
+                if now - _last_collect.get(ieee, 0) >= min_interval:
+                    to_collect.append(ieee)
         if to_collect:
+            for ieee in to_collect:
+                _last_collect[ieee] = now
             threading.Thread(
                 target=_collect_now, args=(to_collect,), kwargs={"check_changed": True},
                 daemon=True).start()

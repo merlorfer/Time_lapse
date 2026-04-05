@@ -258,6 +258,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             f_date  = qs.get("from", [today])[0]
             t_date  = qs.get("to",   [today])[0]
             self._send_json(get_sensor_data(f_date, t_date))
+        elif path.startswith("/archive/") or path.startswith("/renders/") or path == "/master.mp4":
+            self._serve_video(path)
         else:
             self.send_error(404)
 
@@ -284,6 +286,70 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(data)
         except FileNotFoundError:
             self.send_error(404)
+
+    def _serve_video(self, url_path: str):
+        video_base = get_video_base()
+        # Map URL path to filesystem path safely
+        if url_path == "/master.mp4":
+            filepath = os.path.join(video_base, "master.mp4")
+        else:
+            # /archive/name.mp4 or /renders/name.mp4
+            parts = url_path.lstrip("/").split("/", 1)
+            if len(parts) != 2 or parts[0] not in ("archive", "renders"):
+                self.send_error(404)
+                return
+            subdir, filename = parts
+            # Reject path traversal
+            if ".." in filename or "/" in filename:
+                self.send_error(403)
+                return
+            filepath = os.path.join(video_base, subdir, filename)
+
+        if not os.path.isfile(filepath):
+            self.send_error(404)
+            return
+
+        file_size = os.path.getsize(filepath)
+        range_header = self.headers.get("Range")
+
+        if range_header:
+            # Parse "bytes=start-end"
+            try:
+                byte_range = range_header.replace("bytes=", "").split("-")
+                start = int(byte_range[0]) if byte_range[0] else 0
+                end   = int(byte_range[1]) if byte_range[1] else file_size - 1
+            except Exception:
+                self.send_error(400)
+                return
+            end = min(end, file_size - 1)
+            length = end - start + 1
+            self.send_response(206)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+            self.send_header("Content-Length", length)
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+            with open(filepath, "rb") as f:
+                f.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = f.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        else:
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Length", file_size)
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+            with open(filepath, "rb") as f:
+                while True:
+                    chunk = f.read(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
 
     def _send_json(self, data: dict):
         content = json.dumps(data, ensure_ascii=False).encode()

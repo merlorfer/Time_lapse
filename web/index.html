@@ -496,7 +496,7 @@ function renderVideoList(type, videos, master) {
         <div class="vsize">${fmtSize(master.size)}</div>
         <div class="vdate">${fmtDate(master.mtime)}</div>
         <button class="btn-green" style="padding:5px 12px;font-size:12px" onclick="playVideo('master.mp4','master')">▶</button>
-        <a href="http://${location.hostname}:8080/master.mp4" download class="btn-blue" style="padding:5px 12px;font-size:12px;text-decoration:none;border-radius:7px">⬇</a>
+        <a href="${location.origin}/master.mp4" download class="btn-blue" style="padding:5px 12px;font-size:12px;text-decoration:none;border-radius:7px">⬇</a>
       </div>`;
     } else {
       wrap.innerHTML = '';
@@ -509,14 +509,29 @@ function renderVideoList(type, videos, master) {
   }
 
   const subpath = type === 'archive' ? 'archive' : 'renders';
-  list.innerHTML = videos.map(v => `
-    <div class="video-item">
+  const INITIAL = type === 'archive' ? 2 : videos.length;
+  const visible = videos.slice(0, INITIAL);
+  const hidden  = videos.slice(INITIAL);
+
+  function videoItemHtml(v) {
+    return `<div class="video-item">
       <div class="vname">${escHtml(v.name)}</div>
       <div class="vsize">${fmtSize(v.size)}</div>
       <div class="vdate">${fmtDate(v.mtime)}</div>
       <button class="btn-blue" style="padding:5px 12px;font-size:12px" onclick="playVideo('${subpath}/${escHtml(v.name)}','${escHtml(v.name)}')">▶</button>
-      <a href="http://${location.hostname}:8080/${subpath}/${encodeURIComponent(v.name)}" download class="btn-gray" style="padding:5px 12px;font-size:12px;text-decoration:none;border-radius:7px;border:1px solid var(--border)">⬇</a>
-    </div>`).join('');
+      <a href="${location.origin}/${subpath}/${encodeURIComponent(v.name)}" download class="btn-gray" style="padding:5px 12px;font-size:12px;text-decoration:none;border-radius:7px;border:1px solid var(--border)">⬇</a>
+    </div>`;
+  }
+
+  let html = visible.map(videoItemHtml).join('');
+  if (hidden.length > 0) {
+    html += `<div id="archive-more" style="display:none">${hidden.map(videoItemHtml).join('')}</div>`;
+    html += `<button id="archive-more-btn" class="btn-gray" style="width:100%;margin-top:6px" onclick="
+      document.getElementById('archive-more').style.display='block';
+      this.style.display='none';
+    ">▼ Régebbi videók (${hidden.length} db)</button>`;
+  }
+  list.innerHTML = html;
 }
 
 function switchTab(name) {
@@ -536,7 +551,7 @@ function switchLogTab(name) {
 }
 
 function playVideo(path, title) {
-  const url = `http://${location.hostname}:8080/${path}`;
+  const url = `${location.origin}/${path}`;
   document.getElementById('player-title').textContent = title;
   const vid = document.getElementById('player-video');
   vid.src = url;
