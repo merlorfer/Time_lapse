@@ -249,6 +249,22 @@ plink -pw orangepi -batch orangepi@100.68.70.151 "echo orangepi | sudo -S system
 
 ---
 
+## WebUI le- és felállítása
+
+A webes felületek leállíthatók anélkül, hogy a timelapse felvétel megszakadna (a cron fut tovább).
+
+**Leállítás** (esp32-proxy, esp32-serial, timelapse-web, timelapse-http):
+```bash
+/home/orangepi/timelapse/scripts/webui_stop.sh
+```
+
+**Indítás:**
+```bash
+/home/orangepi/timelapse/scripts/webui_start.sh
+```
+
+---
+
 ## Azonnali renderelés (meglévő képekből)
 
 Ha nem akarsz várni az éjféli automatikus compile-ra:
