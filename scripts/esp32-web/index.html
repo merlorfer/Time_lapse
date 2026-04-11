@@ -93,6 +93,26 @@
                 <div id="device-list" class="device-list">
                     <p class="no-devices">Nincs csatlakozott eszkoz</p>
                 </div>
+
+                <!-- Virtual actuator add -->
+                <details style="margin-top:1rem;">
+                    <summary style="cursor:pointer;font-weight:600;color:#2980b9;">+ Virtualis aktuator hozzaadasa</summary>
+                    <div style="margin-top:0.75rem;padding:0.75rem;background:#f8f9fa;border-radius:6px;">
+                        <div class="form-group">
+                            <label for="new-virtual-name">Nev:</label>
+                            <input type="text" id="new-virtual-name" placeholder="pl. Ontozovezerlő">
+                        </div>
+                        <div class="form-group">
+                            <label for="new-virtual-on">BE parancs:</label>
+                            <input type="text" id="new-virtual-on" placeholder="pl. set var4 1">
+                        </div>
+                        <div class="form-group">
+                            <label for="new-virtual-off">KI parancs:</label>
+                            <input type="text" id="new-virtual-off" placeholder="pl. set var4 0">
+                        </div>
+                        <button onclick="addVirtualDevice()" class="btn btn-primary btn-small">Letrehozas</button>
+                    </div>
+                </details>
             </section>
 
             <!-- Global Settings Section -->
@@ -201,6 +221,17 @@ endon
                     <h3 class="rules-subheader">Timerek</h3>
                     <div id="rules-timers-list" class="rules-cards"></div>
                 </div>
+
+                <!-- Rules command exec -->
+                <div style="margin-top:1rem;">
+                    <h3 class="rules-subheader">Parancs azonnali futtatasa</h3>
+                    <p class="hint">Pl: <code>set var1 99</code> &nbsp;|&nbsp; <code>timerSet 1 60</code> &nbsp;|&nbsp; <code>on Lampa</code></p>
+                    <div style="display:flex;gap:0.5rem;align-items:center;">
+                        <input type="text" id="rules-exec-cmd" placeholder="set var1 1" style="flex:1;">
+                        <button onclick="execRulesCmd()" class="btn btn-primary btn-small">Futtat</button>
+                    </div>
+                    <div id="rules-exec-result" style="margin-top:6px;font-size:0.85em;"></div>
+                </div>
             </section>
 
             <!-- Mode Control Info Section -->
@@ -279,15 +310,18 @@ endon
                         </div>
 
                         <div class="form-group">
-                            <label for="edit-mode">Mukodesi mod:</label>
-                            <select id="edit-mode" onchange="onModeChange()">
-                                <option value="fixed_time">Fix idopont</option>
-                                <option value="delay">Delay (Kesleltetes)</option>
-                            </select>
+                            <label>Mukodesi mod:</label>
+                            <div style="display:flex;gap:1.5rem;margin-top:4px;">
+                                <label><input type="checkbox" id="edit-mode-fixed" onchange="onModeChange()"> Fix idopont</label>
+                                <label><input type="checkbox" id="edit-mode-delay" onchange="onModeChange()"> Ismetles (delay)</label>
+                            </div>
+                            <small class="hint" id="interval-mode-hint" style="display:none;color:#e67e22;">
+                                &#9201; Interval mod: a delay ciklus csak az idoablak(ok)on belul fut, kulonben KI.
+                            </small>
                         </div>
 
                         <!-- Fixed Time Mode Settings -->
-                        <div id="fixed-time-settings">
+                        <div id="fixed-time-settings" class="hidden">
                             <div id="time-pairs-container"></div>
                             <button type="button" onclick="addTimePair()" class="btn btn-secondary btn-small">
                                 + Uj idopont hozzaadasa
@@ -311,6 +345,18 @@ endon
                                 <label for="edit-delay-off2">OFF2 idotartam (perc):</label>
                                 <input type="number" id="edit-delay-off2" min="0" max="1440" value="30">
                                 <small class="hint">Kesleltetes az ON utan (lehet 0)</small>
+                            </div>
+                        </div>
+
+                        <!-- Virtual actuator commands -->
+                        <div id="virtual-cmd-settings" class="hidden">
+                            <div class="form-group">
+                                <label for="edit-virtual-on-cmd">BE parancs (rules engine):</label>
+                                <input type="text" id="edit-virtual-on-cmd" placeholder="pl. set var4 1">
+                            </div>
+                            <div class="form-group">
+                                <label for="edit-virtual-off-cmd">KI parancs (rules engine):</label>
+                                <input type="text" id="edit-virtual-off-cmd" placeholder="pl. set var4 0">
                             </div>
                         </div>
                     </div>

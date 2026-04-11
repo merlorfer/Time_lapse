@@ -170,6 +170,33 @@ function updateControlButtons() {
         pairingBtn.disabled = !canPair;
         pairingBtn.title = canPair ? '' : 'Csak Zigbee uzemmodban elerheto (BLE kapcsolat szukseges)';
     }
+
+    // Update sticky BLE status bar
+    const stickyIndicator = document.getElementById('sticky-ble-indicator');
+    const stickyStatusText = document.getElementById('sticky-ble-text');
+    const stickyConnectBtn = document.getElementById('sticky-ble-connect-btn');
+    const stickyDisconnectBtn = document.getElementById('sticky-ble-disconnect-btn');
+
+    if (stickyIndicator) {
+        stickyIndicator.className = bleConnected ? 'status-dot connected' : 'status-dot disconnected';
+    }
+    if (stickyStatusText) {
+        stickyStatusText.textContent = 'BLE: ' + (bleConnected ? 'Csatlakozva' : 'Nincs csatlakozva');
+    }
+    if (stickyConnectBtn) {
+        if (bleConnected) {
+            stickyConnectBtn.classList.add('hidden');
+        } else {
+            stickyConnectBtn.classList.remove('hidden');
+        }
+    }
+    if (stickyDisconnectBtn) {
+        if (bleConnected) {
+            stickyDisconnectBtn.classList.remove('hidden');
+        } else {
+            stickyDisconnectBtn.classList.add('hidden');
+        }
+    }
 }
 
 async function connectBLE() {
@@ -357,6 +384,12 @@ function endpointToCommand(endpoint, body) {
     if (endpoint === '/api/rules/reset') {
         return { cmd: 'reset_rules', params: {} };
     }
+    if (endpoint === '/api/rules/exec') {
+        return { cmd: 'exec_rules_cmd', params: body || {} };
+    }
+    if (endpoint === '/api/devices/virtual') {
+        return { cmd: 'add_virtual_device', params: body || {} };
+    }
     if (endpoint === '/api/logs/live') {
         return { cmd: 'get_logs_live', params: { lines: 50 } };
     }
@@ -389,6 +422,15 @@ async function loadStatus() {
 
         zigbeeActive = !!data.zigbee_active;
         updateControlButtons();
+
+        // Ha WiFi mód nem aktív (átváltott Zigbee módba), leállítjuk a HTTP pollingot
+        if (!data.wifi_active && !bleConnected) {
+            clearInterval(statusInterval);  statusInterval = null;
+            clearInterval(devicesInterval); devicesInterval = null;
+            clearInterval(logsInterval);    logsInterval = null;
+            clearInterval(timersInterval);  timersInterval = null;
+            document.getElementById('status-text').textContent = 'WiFi mod inaktiv (Zigbee mod)';
+        }
 
         const rtcStatus = document.getElementById('rtc-status');
         if (data.rtc_initialized) {
@@ -486,6 +528,29 @@ async function refreshDevices() {
     }
 }
 
+async function addVirtualDevice() {
+    const name   = document.getElementById('new-virtual-name').value.trim();
+    const onCmd  = document.getElementById('new-virtual-on').value.trim();
+    const offCmd = document.getElementById('new-virtual-off').value.trim();
+    if (!name) { showToast('Kerem adjon meg nevet!', true); return; }
+    try {
+        const data = await apiRequest('/api/devices/virtual', 'POST', {
+            name, on_cmd: onCmd, off_cmd: offCmd
+        });
+        if (data.status === 'ok') {
+            showToast('Virtualis aktuator letrehozva');
+            document.getElementById('new-virtual-name').value = '';
+            document.getElementById('new-virtual-on').value = '';
+            document.getElementById('new-virtual-off').value = '';
+            await loadDevices();
+        } else {
+            showToast(data.message || 'Hiba tortent', true);
+        }
+    } catch (error) {
+        showToast('Kapcsolati hiba', true);
+    }
+}
+
 async function deleteDevice(ieeeAddr) {
     if (!confirm('Biztosan torolni szeretne ezt az eszkozt?')) return;
     try {
@@ -523,9 +588,9 @@ function renderDevices() {
         return;
     }
     container.innerHTML = devices.map(device =>
-        isSensorDevice(device.device_type)
-            ? renderSensorCard(device)
-            : renderOnOffCard(device)
+        isSensorDevice(device.device_type) ? renderSensorCard(device) :
+        device.device_type === 'virtual'   ? renderVirtualCard(device) :
+                                             renderOnOffCard(device)
     ).join('');
 }
 
@@ -594,6 +659,37 @@ function renderOnOffCard(device) {
             <details class="device-details">
                 <summary>Reszletek</summary>
                 <div class="device-addr">IEEE: ${device.ieee_addr} &nbsp;|&nbsp; EP: ${device.endpoint}</div>
+            </details>
+        </div>`;
+}
+
+function renderVirtualCard(device) {
+    const modeLabel = device.mode === 'interval' ? 'Interval'
+                    : device.mode === 'fixed_time' ? 'Fix idopont'
+                    : device.mode === 'delay' ? 'Ismetles'
+                    : 'Nincs';
+    return `
+        <div class="device-item">
+            <div class="device-header">
+                <span class="device-name">${escapeHtml(device.custom_name)} <small style="color:#888;">[virtualis]</small></span>
+                <div class="device-edit-actions">
+                    <button onclick="editDevice('${device.ieee_addr}', ${device.endpoint}, 'virtual')" class="btn btn-primary btn-small">Szerkesztes</button>
+                    <button onclick="deleteDevice('${device.ieee_addr}')" class="btn btn-danger btn-small">Torles</button>
+                </div>
+            </div>
+            <div class="device-status">
+                <span class="state-badge ${device.enabled ? 'state-on' : 'state-off'}">
+                    ${device.enabled ? 'Automatizacio BE' : 'Automatizacio KI'}
+                </span>
+                <span style="font-size:0.8em;color:#666;margin-left:0.5rem;">Mod: ${modeLabel}</span>
+            </div>
+            <details class="device-details">
+                <summary>Parancsok / Reszletek</summary>
+                <div style="font-size:0.85em;margin-top:4px;">
+                    <div>BE: <code>${escapeHtml(device.virtual_on_cmd || '–')}</code></div>
+                    <div>KI: <code>${escapeHtml(device.virtual_off_cmd || '–')}</code></div>
+                    <div class="device-addr" style="margin-top:4px;">IEEE: ${device.ieee_addr}</div>
+                </div>
             </details>
         </div>`;
 }
@@ -726,13 +822,31 @@ function editDevice(ieeeAddr, endpoint, deviceType) {
             isLeakSensor ? 'Szivargás allapot (trigger)' : 'Felso korlat (hutes)';
     } else {
         document.getElementById('edit-enabled').checked = device.enabled;
-        document.getElementById('edit-mode').value = device.mode;
+
+        // Checkbox alapú mód (interval támogatással)
+        const modeFixed = document.getElementById('edit-mode-fixed');
+        const modeDelay = document.getElementById('edit-mode-delay');
+        const legacySel = document.getElementById('edit-mode');
+        const mode = device.mode || 'none';
+        if (modeFixed && modeDelay) {
+            modeFixed.checked = (mode === 'fixed_time' || mode === 'interval' || device.mode_fixed_time === true);
+            modeDelay.checked = (mode === 'delay'      || mode === 'interval' || device.mode_delay === true);
+        } else if (legacySel) {
+            legacySel.value = (mode === 'interval') ? 'fixed_time' : (mode || 'fixed_time');
+        }
 
         document.getElementById('edit-delay-off1').value      = device.delay_off1_minutes ?? 0;
         document.getElementById('edit-delay-duration').value  = device.delay_duration_minutes ?? 120;
         document.getElementById('edit-delay-off2').value      = device.delay_off2_minutes ?? 30;
 
         renderTimePairs(device.time_pairs || [{ on: '06:00', off: '18:00' }]);
+
+        // Virtuális eszköz parancsok
+        const onCmdEl  = document.getElementById('edit-virtual-on-cmd');
+        const offCmdEl = document.getElementById('edit-virtual-off-cmd');
+        if (onCmdEl)  onCmdEl.value  = device.virtual_on_cmd  || '';
+        if (offCmdEl) offCmdEl.value = device.virtual_off_cmd || '';
+
         onModeChange();
 
         // Show sensor control warning if applicable
@@ -765,9 +879,21 @@ function closeModal() {
 }
 
 function onModeChange() {
-    const mode = document.getElementById('edit-mode').value;
-    document.getElementById('fixed-time-settings').classList.toggle('hidden', mode !== 'fixed_time');
-    document.getElementById('delay-settings').classList.toggle('hidden', mode === 'fixed_time');
+    const modeFixedEl = document.getElementById('edit-mode-fixed');
+    const modeDelayEl = document.getElementById('edit-mode-delay');
+    const modeFixed = modeFixedEl ? modeFixedEl.checked : false;
+    const modeDelay = modeDelayEl ? modeDelayEl.checked : false;
+
+    document.getElementById('fixed-time-settings').classList.toggle('hidden', !modeFixed);
+    document.getElementById('delay-settings').classList.toggle('hidden', !modeDelay);
+
+    const hint = document.getElementById('interval-mode-hint');
+    if (hint) hint.style.display = (modeFixed && modeDelay) ? '' : 'none';
+
+    // Virtuális eszköz parancs mezők
+    const deviceType = document.getElementById('edit-device-type') ? document.getElementById('edit-device-type').value : '';
+    const virtualDiv = document.getElementById('virtual-cmd-settings');
+    if (virtualDiv) virtualDiv.classList.toggle('hidden', deviceType !== 'virtual');
 }
 
 function renderLinkedDeviceSelect(selectId, currentValue) {
@@ -851,16 +977,43 @@ async function saveDeviceConfig() {
             report_change:        parseInt(document.getElementById('edit-report-change').value)
         };
     } else {
-        const mode = document.getElementById('edit-mode').value;
         config.enabled = document.getElementById('edit-enabled').checked;
-        config.mode    = mode;
-        if (mode === 'fixed_time') {
-            config.time_pairs = getTimePairs();
+
+        // Mód meghatározása — checkbox vagy legacy select
+        const modeFixedEl = document.getElementById('edit-mode-fixed');
+        const modeDelayEl = document.getElementById('edit-mode-delay');
+        const legacySelEl = document.getElementById('edit-mode');
+        let modeFixed, modeDelay;
+        if (modeFixedEl && modeDelayEl) {
+            modeFixed = modeFixedEl.checked;
+            modeDelay = modeDelayEl.checked;
         } else {
+            const v = legacySelEl ? legacySelEl.value : 'fixed_time';
+            modeFixed = (v === 'fixed_time' || v === 'interval');
+            modeDelay = (v === 'delay'      || v === 'interval');
+        }
+        config.mode_fixed_time = modeFixed;
+        config.mode_delay      = modeDelay;
+        // Legacy string is also sent for backward compat
+        if (modeFixed && modeDelay) config.mode = 'interval';
+        else if (modeFixed)         config.mode = 'fixed_time';
+        else if (modeDelay)         config.mode = 'delay';
+        else                        config.mode = 'none';
+
+        if (modeFixed) {
+            config.time_pairs = getTimePairs();
+        }
+        if (modeDelay) {
             config.delay_off1_minutes     = parseInt(document.getElementById('edit-delay-off1').value);
             config.delay_duration_minutes = parseInt(document.getElementById('edit-delay-duration').value);
             config.delay_off2_minutes     = parseInt(document.getElementById('edit-delay-off2').value);
         }
+
+        // Virtuális eszköz parancsok
+        const onCmdEl  = document.getElementById('edit-virtual-on-cmd');
+        const offCmdEl = document.getElementById('edit-virtual-off-cmd');
+        if (onCmdEl)  config.virtual_on_cmd  = onCmdEl.value;
+        if (offCmdEl) config.virtual_off_cmd = offCmdEl.value;
     }
 
     try {
@@ -1206,6 +1359,27 @@ function renderTimers(timers) {
         ).join('');
     } else {
         container.innerHTML = '<span class="hint">Nincs aktiv timer</span>';
+    }
+}
+
+async function execRulesCmd() {
+    const input = document.getElementById('rules-exec-cmd');
+    const resultDiv = document.getElementById('rules-exec-result');
+    const cmd = input ? input.value.trim() : '';
+    if (!cmd) { showToast('Kerem adjon meg parancsot!', true); return; }
+
+    if (resultDiv) resultDiv.textContent = 'Futtatás...';
+    try {
+        const data = await apiRequest('/api/rules/exec', 'POST', { cmd });
+        const ok = data && (data.status === 'ok' || data.success);
+        if (resultDiv) {
+            resultDiv.textContent = ok ? '✓ OK' : ('Hiba: ' + (data.message || data.error || 'ismeretlen'));
+            resultDiv.style.color = ok ? '#27ae60' : '#e74c3c';
+        }
+        showToast(ok ? 'Parancs vegrehajtva' : 'Hiba: ' + (data.message || ''), !ok);
+    } catch (e) {
+        if (resultDiv) { resultDiv.textContent = 'Kapcsolati hiba'; resultDiv.style.color = '#e74c3c'; }
+        showToast('Kapcsolati hiba', true);
     }
 }
 
