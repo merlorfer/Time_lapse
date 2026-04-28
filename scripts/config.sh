@@ -39,3 +39,6 @@ fi
 
 ARCHIVE_DIR="${VIDEO_BASE}/archive"
 MASTER_VIDEO="${VIDEO_BASE}/master.mp4"
+
+# Perzisztens konfig (SD kártyán, túléli a rebootot)
+TIMELAPSE_CONFIG="/home/orangepi/timelapse/timelapse_config.json"

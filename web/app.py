@@ -15,20 +15,61 @@ import threading
 from datetime import date, timedelta
 from urllib.parse import urlparse, parse_qs
 
-SCRIPT_DIR      = "/home/orangepi/timelapse/scripts"
-LOG_DIR         = "/home/orangepi/timelapse/logs"
-FRAME_DIR       = "/tmp/timelapse_frames"
-SENSOR_RAM_DIR  = "/tmp/sensor_data"
-SERIAL_LOG_FILE = "/tmp/esp32_serial.log"
-PORT            = 8082
-HOST            = "0.0.0.0"
+SCRIPT_DIR        = "/home/orangepi/timelapse/scripts"
+LOG_DIR           = "/home/orangepi/timelapse/logs"
+FRAME_DIR         = "/tmp/timelapse_frames"
+SENSOR_RAM_DIR    = "/tmp/sensor_data"
+SERIAL_LOG_FILE   = "/tmp/esp32_serial.log"
+TIMELAPSE_CONFIG  = "/home/orangepi/timelapse/timelapse_config.json"
+PORT              = 8082
+HOST              = "0.0.0.0"
 
 ALLOWED_SCRIPTS = {
     "start_timelapse", "stop_timelapse",
     "preview_start",   "preview_stop",
     "render_now",      "compile_daily",
     "test_capture",    "test_compile",
+    "safe_reboot",
 }
+
+# ── System config helpers ────────────────────────────────────────────────────
+_CONFIG_DEFAULTS = {
+    "email_enabled":       False,
+    "email_to":            "",
+    "smtp_server":         "smtp.gmail.com",
+    "smtp_port":           587,
+    "smtp_user":           "",
+    "smtp_password":       "",
+    "reboot_enabled":      False,
+    "reboot_interval_days": 7,
+    "reboot_time":         "03:00",
+    "last_reboot_date":    "",
+}
+
+def load_system_config() -> dict:
+    cfg = dict(_CONFIG_DEFAULTS)
+    try:
+        with open(TIMELAPSE_CONFIG) as f:
+            cfg.update(json.load(f))
+    except Exception:
+        pass
+    return cfg
+
+def save_system_config(data: dict):
+    tmp = TIMELAPSE_CONFIG + ".tmp"
+    os.makedirs(os.path.dirname(TIMELAPSE_CONFIG), exist_ok=True)
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, TIMELAPSE_CONFIG)
+
+def _next_reboot_date(cfg: dict) -> str:
+    last = cfg.get("last_reboot_date", "")
+    interval = int(cfg.get("reboot_interval_days", 7))
+    try:
+        base = date.fromisoformat(last) if last else date.today()
+        return (base + timedelta(days=interval)).isoformat()
+    except Exception:
+        return date.today().isoformat()
 
 # ── Parameter validators ────────────────────────────────────────────────────
 _TIME = re.compile(r"^\d{2}:\d{2}$")
@@ -214,6 +255,12 @@ def get_status() -> dict:
         except Exception:
             pass
 
+    # Reboot schedule info
+    cfg = load_system_config()
+    reboot_scheduled  = bool(cfg.get("reboot_enabled"))
+    next_reboot_date  = _next_reboot_date(cfg) if reboot_scheduled else ""
+    last_reboot_date  = cfg.get("last_reboot_date", "")
+
     return {
         "timelapse_active": tl_active,
         "started_at":       started_at,
@@ -222,6 +269,9 @@ def get_status() -> dict:
         "disk_sd":          disk_sd,
         "usb_ok":           usb_ok,
         "disk_usb":         disk_usb,
+        "reboot_scheduled": reboot_scheduled,
+        "next_reboot_date": next_reboot_date,
+        "last_reboot_date": last_reboot_date,
     }
 
 # ── HTTP handler ─────────────────────────────────────────────────────────────
@@ -258,6 +308,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             f_date  = qs.get("from", [today])[0]
             t_date  = qs.get("to",   [today])[0]
             self._send_json(get_sensor_data(f_date, t_date))
+        elif path == "/api/system-config":
+            self._serve_system_config()
         elif path.startswith("/archive/") or path.startswith("/renders/") or path == "/master.mp4":
             self._serve_video(path)
         else:
@@ -266,10 +318,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # ── POST ─────────────────────────────────────────────────────────────────
     def do_POST(self):
         parsed = urlparse(self.path)
+        length = int(self.headers.get("Content-Length", 0))
+        body   = json.loads(self.rfile.read(length)) if length else {}
         if parsed.path == "/api/run":
-            length = int(self.headers.get("Content-Length", 0))
-            body   = json.loads(self.rfile.read(length)) if length else {}
             self._run_script(body.get("script", ""), body.get("params", {}))
+        elif parsed.path == "/api/system-config":
+            self._save_system_config(body)
+        elif parsed.path == "/api/safe-reboot":
+            self._trigger_safe_reboot()
+        elif parsed.path == "/api/test-email":
+            self._send_test_email()
         else:
             self.send_error(404)
 
@@ -379,6 +437,92 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json({"lines": r.stdout.splitlines()})
         except Exception:
             self._send_json({"lines": []})
+
+    def _serve_system_config(self):
+        cfg = load_system_config()
+        safe = {k: v for k, v in cfg.items() if k != "smtp_password"}
+        safe["smtp_password_set"] = bool(cfg.get("smtp_password", ""))
+        self._send_json(safe)
+
+    def _save_system_config(self, body: dict):
+        _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+        _STR   = re.compile(r"^[\w\-_.@+]+$")
+        cfg = load_system_config()
+        errors = []
+
+        if "email_enabled" in body:
+            cfg["email_enabled"] = bool(body["email_enabled"])
+        if "email_to" in body:
+            v = str(body["email_to"]).strip()
+            if v and not _EMAIL.match(v):
+                errors.append("Érvénytelen email cím")
+            else:
+                cfg["email_to"] = v
+        if "smtp_server" in body:
+            cfg["smtp_server"] = str(body["smtp_server"]).strip()[:128]
+        if "smtp_port" in body:
+            try:
+                p = int(body["smtp_port"])
+                if 1 <= p <= 65535:
+                    cfg["smtp_port"] = p
+            except (ValueError, TypeError):
+                errors.append("Érvénytelen SMTP port")
+        if "smtp_user" in body:
+            cfg["smtp_user"] = str(body["smtp_user"]).strip()[:128]
+        if "smtp_password" in body and body["smtp_password"]:
+            cfg["smtp_password"] = str(body["smtp_password"])
+        if "reboot_enabled" in body:
+            cfg["reboot_enabled"] = bool(body["reboot_enabled"])
+        if "reboot_interval_days" in body:
+            try:
+                d = int(body["reboot_interval_days"])
+                if 1 <= d <= 365:
+                    cfg["reboot_interval_days"] = d
+                else:
+                    errors.append("Intervallum 1-365 nap között legyen")
+            except (ValueError, TypeError):
+                errors.append("Érvénytelen intervallum")
+        if "reboot_time" in body and _TIME.match(str(body["reboot_time"])):
+            cfg["reboot_time"] = str(body["reboot_time"])
+
+        if errors:
+            self._send_json({"ok": False, "errors": errors})
+            return
+        try:
+            save_system_config(cfg)
+            self._send_json({"ok": True, "next_reboot_date": _next_reboot_date(cfg)})
+        except Exception as e:
+            self._send_json({"ok": False, "errors": [str(e)]})
+
+    def _trigger_safe_reboot(self):
+        script_path = os.path.join(SCRIPT_DIR, "safe_reboot.sh")
+        if not os.path.isfile(script_path):
+            self._send_json({"ok": False, "output": "safe_reboot.sh nem található"})
+            return
+        self._send_json({"ok": True, "output": "Biztonságos újraindítás folyamatban..."})
+        threading.Thread(target=lambda: subprocess.run(
+            ["bash", script_path], capture_output=True
+        ), daemon=True).start()
+
+    def _send_test_email(self):
+        script_path = os.path.join(SCRIPT_DIR, "send_alert.py")
+        if not os.path.isfile(script_path):
+            self._send_json({"ok": False, "output": "send_alert.py nem található"})
+            return
+        try:
+            result = subprocess.run(
+                ["python3", script_path, "Teszt értesítés",
+                 f"Ez egy teszt email a timelapse rendszertől ({os.uname().nodename})."],
+                capture_output=True, text=True, timeout=60
+            )
+            self._send_json({
+                "ok":     result.returncode == 0,
+                "output": (result.stdout + result.stderr).strip() or "Elküldve",
+            })
+        except subprocess.TimeoutExpired:
+            self._send_json({"ok": False, "output": "Timeout (60 mp)"})
+        except Exception as e:
+            self._send_json({"ok": False, "output": str(e)})
 
     def _run_script(self, script: str, params: dict):
         if script not in ALLOWED_SCRIPTS:

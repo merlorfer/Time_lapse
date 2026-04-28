@@ -52,5 +52,38 @@ if [ -f /tmp/timelapse_session.conf ]; then
     log "Session conf mentve → $VIDEO_BASE/timelapse_session_backup.conf"
 fi
 
+# ── 4. Pre-reboot state mentése visszaállításhoz ─────────────────────────────
+PRE_REBOOT_STATE="/home/orangepi/timelapse/pre_reboot_state.json"
+
+TL_ACTIVE=false
+SESSION_START=""
+SESSION_END=""
+SESSION_INTERVAL=""
+SESSION_STORAGE=""
+
+if [ -f /tmp/timelapse_active ]; then
+    TL_ACTIVE=true
+fi
+
+if [ -f /tmp/timelapse_session.conf ]; then
+    SESSION_START=$(grep   '^CAPTURE_START='   /tmp/timelapse_session.conf | cut -d= -f2 | tr -d '"' || echo "")
+    SESSION_END=$(grep     '^CAPTURE_END='     /tmp/timelapse_session.conf | cut -d= -f2 | tr -d '"' || echo "")
+    SESSION_INTERVAL=$(grep '^CAPTURE_INTERVAL=' /tmp/timelapse_session.conf | cut -d= -f2 | tr -d '"' || echo "")
+    SESSION_STORAGE=$(grep '^VIDEO_BASE='      /tmp/timelapse_session.conf | cut -d= -f2 | tr -d '"' || echo "")
+fi
+
+cat > "$PRE_REBOOT_STATE" <<EOF
+{
+  "timelapse_active": $TL_ACTIVE,
+  "session_start": "$SESSION_START",
+  "session_end": "$SESSION_END",
+  "session_interval": "$SESSION_INTERVAL",
+  "session_storage": "$SESSION_STORAGE",
+  "reboot_time": "$(date --iso-8601=seconds)",
+  "reboot_reason": "scheduled"
+}
+EOF
+log "Pre-reboot state mentve → $PRE_REBOOT_STATE (timelapse_active=$TL_ACTIVE)"
+
 log "=== Mentés kész, újraindítás... ==="
 sudo reboot

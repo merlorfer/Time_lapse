@@ -1,0 +1,15 @@
+[Unit]
+Description=Timelapse Post-Boot Restore
+After=network.target systemd-udev-settle.service local-fs.target
+Wants=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/orangepi/timelapse/scripts/post_boot_restore.sh
+User=orangepi
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

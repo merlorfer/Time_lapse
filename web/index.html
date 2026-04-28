@@ -149,6 +149,11 @@ button:disabled { opacity: .35; cursor: not-allowed; }
       <div class="stat-value" id="disk-usb">–</div>
       <div class="stat-sub" id="disk-usb-sub"></div>
     </div>
+    <div class="stat">
+      <div class="stat-label">Reboot ütemezés</div>
+      <div class="stat-value" id="reboot-status"><span class="dot red"></span>Kikapcsolt</div>
+      <div class="stat-sub" id="reboot-next"></div>
+    </div>
   </div>
 
   <!-- Two-column: preview + controls -->
@@ -282,6 +287,75 @@ button:disabled { opacity: .35; cursor: not-allowed; }
     </div>
   </div>
 
+  <!-- Rendszerbeállítások -->
+  <div class="card">
+    <div class="card-title">Rendszerbeállítások</div>
+    <div class="two-col" style="gap:16px">
+
+      <!-- Email értesítés -->
+      <div>
+        <div class="card-title" style="margin-bottom:10px">Email értesítés</div>
+        <div class="form-row">
+          <label><input type="checkbox" id="cfg-email-enabled" style="width:auto;margin-right:6px">Értesítések engedélyezése</label>
+        </div>
+        <div class="form-row">
+          <label>Értesítési email cím</label>
+          <input type="email" id="cfg-email-to" placeholder="pl. pelda@gmail.com">
+        </div>
+        <div class="form-row">
+          <label>SMTP szerver</label>
+          <input type="text" id="cfg-smtp-server" value="smtp.gmail.com">
+        </div>
+        <div class="form-row">
+          <label>SMTP port</label>
+          <input type="number" id="cfg-smtp-port" value="587" min="1" max="65535">
+        </div>
+        <div class="form-row">
+          <label>Gmail felhasználó (feladó)</label>
+          <input type="text" id="cfg-smtp-user" placeholder="pl. feladó@gmail.com">
+        </div>
+        <div class="form-row">
+          <label>Gmail App Password</label>
+          <input type="password" id="cfg-smtp-password" placeholder="(nem változik, ha üresen hagyod)">
+          <div class="hint">Fiók → Biztonság → App jelszavak</div>
+        </div>
+        <div class="btn-grid">
+          <button class="btn-blue" onclick="sendTestEmail()">📧 Teszt email küldés</button>
+        </div>
+      </div>
+
+      <!-- Ütemezett reboot -->
+      <div>
+        <div class="card-title" style="margin-bottom:10px">Ütemezett újraindítás</div>
+        <div class="form-row">
+          <label><input type="checkbox" id="cfg-reboot-enabled" style="width:auto;margin-right:6px">Ütemezés engedélyezése</label>
+        </div>
+        <div class="form-row">
+          <label>Újraindítás minden (nap)</label>
+          <input type="number" id="cfg-reboot-interval" value="7" min="1" max="365">
+        </div>
+        <div class="form-row">
+          <label>Újraindítás időpontja</label>
+          <input type="time" id="cfg-reboot-time" value="03:00">
+          <div class="hint">±5 perc toleranciával ellenőriz</div>
+        </div>
+        <div style="margin-bottom:14px;font-size:12px;color:var(--muted)">
+          <div>Utolsó reboot: <span id="cfg-last-reboot">–</span></div>
+          <div>Következő: <span id="cfg-next-reboot">–</span></div>
+        </div>
+        <div class="btn-grid">
+          <button class="btn-red" onclick="triggerSafeReboot()" id="safe-reboot-btn">🔄 Biztonságos újraindítás</button>
+        </div>
+      </div>
+
+    </div>
+
+    <div style="display:flex;gap:10px;margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">
+      <button class="btn-green" onclick="saveSystemConfig()">💾 Beállítások mentése</button>
+      <span id="cfg-save-status" style="font-size:12px;color:var(--muted);align-self:center"></span>
+    </div>
+  </div>
+
 </main>
 
 <!-- Modal: Start Timelapse -->
@@ -358,6 +432,7 @@ document.addEventListener('DOMContentLoaded', () => {
   refreshStatus();
   loadLog();
   loadVideos();
+  loadSystemConfig();
   statusInterval = setInterval(refreshStatus, 5000);
 });
 
@@ -414,6 +489,21 @@ async function refreshStatus() {
       document.getElementById('disk-usb').innerHTML =
         '<span class="dot red"></span>Nincs csatlakoztatva';
       document.getElementById('disk-usb-sub').textContent = '';
+    }
+
+    // Reboot schedule
+    const rbEl  = document.getElementById('reboot-status');
+    const rbSub = document.getElementById('reboot-next');
+    if (s.reboot_scheduled) {
+      rbEl.innerHTML = '<span class="dot yellow"></span>Ütemezve';
+      rbSub.textContent = s.next_reboot_date ? 'Következő: ' + s.next_reboot_date : '';
+      document.getElementById('cfg-next-reboot').textContent = s.next_reboot_date || '–';
+    } else {
+      rbEl.innerHTML = '<span class="dot red"></span>Kikapcsolt';
+      rbSub.textContent = '';
+    }
+    if (s.last_reboot_date) {
+      document.getElementById('cfg-last-reboot').textContent = s.last_reboot_date;
     }
 
     document.getElementById('last-refresh').textContent =
@@ -676,6 +766,91 @@ function toggleAutoSerial() {
     btn.textContent = '⏱ Auto OFF';
     btn.className   = 'btn-gray';
     clearInterval(serialInterval);
+  }
+}
+
+// ── System config ────────────────────────────────────────────────────────────
+async function loadSystemConfig() {
+  try {
+    const cfg = await api('/api/system-config');
+    document.getElementById('cfg-email-enabled').checked   = !!cfg.email_enabled;
+    document.getElementById('cfg-email-to').value          = cfg.email_to || '';
+    document.getElementById('cfg-smtp-server').value       = cfg.smtp_server || 'smtp.gmail.com';
+    document.getElementById('cfg-smtp-port').value         = cfg.smtp_port || 587;
+    document.getElementById('cfg-smtp-user').value         = cfg.smtp_user || '';
+    document.getElementById('cfg-reboot-enabled').checked  = !!cfg.reboot_enabled;
+    document.getElementById('cfg-reboot-interval').value   = cfg.reboot_interval_days || 7;
+    document.getElementById('cfg-reboot-time').value       = cfg.reboot_time || '03:00';
+    document.getElementById('cfg-last-reboot').textContent = cfg.last_reboot_date || '–';
+  } catch(e) {}
+}
+
+async function saveSystemConfig() {
+  const btn = document.querySelector('[onclick="saveSystemConfig()"]');
+  const statusEl = document.getElementById('cfg-save-status');
+  btn.disabled = true;
+  statusEl.textContent = 'Mentés...';
+
+  const body = {
+    email_enabled:       document.getElementById('cfg-email-enabled').checked,
+    email_to:            document.getElementById('cfg-email-to').value.trim(),
+    smtp_server:         document.getElementById('cfg-smtp-server').value.trim(),
+    smtp_port:           parseInt(document.getElementById('cfg-smtp-port').value),
+    smtp_user:           document.getElementById('cfg-smtp-user').value.trim(),
+    reboot_enabled:      document.getElementById('cfg-reboot-enabled').checked,
+    reboot_interval_days: parseInt(document.getElementById('cfg-reboot-interval').value),
+    reboot_time:         document.getElementById('cfg-reboot-time').value,
+  };
+  const pw = document.getElementById('cfg-smtp-password').value;
+  if (pw) body.smtp_password = pw;
+
+  try {
+    const res = await api('/api/system-config', 'POST', body);
+    if (res.ok) {
+      statusEl.style.color = 'var(--green)';
+      statusEl.textContent = 'Mentve!';
+      if (res.next_reboot_date) {
+        document.getElementById('cfg-next-reboot').textContent = res.next_reboot_date;
+      }
+      document.getElementById('cfg-smtp-password').value = '';
+    } else {
+      statusEl.style.color = 'var(--red)';
+      statusEl.textContent = (res.errors || ['Ismeretlen hiba']).join(', ');
+    }
+  } catch(e) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = 'Hálózati hiba';
+  } finally {
+    btn.disabled = false;
+    setTimeout(() => { statusEl.textContent = ''; }, 4000);
+  }
+}
+
+async function sendTestEmail() {
+  const btn = document.querySelector('[onclick="sendTestEmail()"]');
+  btn.disabled = true;
+  btn.textContent = '📧 Küldés...';
+  try {
+    const res = await api('/api/test-email', 'POST', {});
+    setOutput(res.output || (res.ok ? 'Elküldve!' : 'Hiba'), !res.ok);
+  } catch(e) {
+    setOutput('Hálózati hiba: ' + e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '📧 Teszt email küldés';
+  }
+}
+
+async function triggerSafeReboot() {
+  if (!confirm('Biztonságos újraindítás? Az adatok el lesznek mentve, majd a rendszer újraindul.')) return;
+  const btn = document.getElementById('safe-reboot-btn');
+  btn.disabled = true;
+  btn.textContent = '🔄 Újraindítás...';
+  try {
+    await api('/api/safe-reboot', 'POST', {});
+    setOutput('Biztonságos újraindítás folyamatban... A rendszer kb. 30 másodperc múlva újraindul.', false);
+  } catch(e) {
+    setOutput('Hálózati hiba (az újraindítás elindulhatott)', false);
   }
 }
 
