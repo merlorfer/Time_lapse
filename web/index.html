@@ -181,7 +181,7 @@ button:disabled { opacity: .35; cursor: not-allowed; }
       <div style="margin-bottom:14px">
         <div class="card-title" style="margin-bottom:8px">Timelapse rögzítés</div>
         <div class="btn-grid">
-          <button class="btn-green" onclick="openModal('start-modal')">▶ Indítás</button>
+          <button class="btn-green" onclick="openStartModal()">▶ Indítás</button>
           <button class="btn-red"   onclick="runScript('stop_timelapse')">■ Leállítás</button>
         </div>
       </div>
@@ -454,6 +454,7 @@ let autoLog        = false;
 let serialInterval = null;
 let autoSerial     = false;
 let running        = false;
+let lastStatus     = null;
 
 // ── Init ────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
@@ -468,6 +469,7 @@ document.addEventListener('DOMContentLoaded', () => {
 async function refreshStatus() {
   try {
     const s = await api('/api/status');
+    lastStatus = s;
 
     // Timelapse
     const tlEl = document.getElementById('tl-status');
@@ -576,6 +578,21 @@ document.addEventListener('click', e => {
     e.target.classList.remove('open');
   }
 });
+
+function openStartModal() {
+  // Ha a timelapse aktív, az aktuális session értékeket töltjük be
+  const s = lastStatus && lastStatus.session;
+  if (lastStatus && lastStatus.timelapse_active && s) {
+    if (s.start)    document.getElementById('p-start').value    = s.start;
+    if (s.end)      document.getElementById('p-end').value      = s.end;
+    if (s.interval) document.getElementById('p-interval').value = s.interval;
+    // storage select: csak ha az érték megvan az option-ök között
+    const sel = document.getElementById('p-storage');
+    const exists = Array.from(sel.options).some(o => o.value === s.storage);
+    sel.value = exists ? s.storage : '';
+  }
+  openModal('start-modal');
+}
 
 function submitStart() {
   closeModal('start-modal');

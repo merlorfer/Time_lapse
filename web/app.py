@@ -329,6 +329,25 @@ def get_status() -> dict:
         except Exception:
             pass
 
+    # Active session parameters
+    session = {"start": "", "end": "", "interval": "", "storage": ""}
+    session_conf = "/tmp/timelapse_session.conf"
+    if os.path.isfile(session_conf):
+        key_map = {
+            "CAPTURE_START":    "start",
+            "CAPTURE_END":      "end",
+            "CAPTURE_INTERVAL": "interval",
+            "VIDEO_BASE":       "storage",
+        }
+        try:
+            with open(session_conf) as f:
+                for line in f:
+                    for k, v in key_map.items():
+                        if line.startswith(k + "="):
+                            session[v] = line.strip().split("=", 1)[1].strip('"\'')
+        except Exception:
+            pass
+
     # Reboot schedule info
     cfg = load_system_config()
     reboot_scheduled  = bool(cfg.get("reboot_enabled"))
@@ -343,6 +362,7 @@ def get_status() -> dict:
         "disk_sd":          disk_sd,
         "usb_ok":           usb_ok,
         "disk_usb":         disk_usb,
+        "session":          session,
         "reboot_scheduled": reboot_scheduled,
         "next_reboot_date": next_reboot_date,
         "last_reboot_date": last_reboot_date,
