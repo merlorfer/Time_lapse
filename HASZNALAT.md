@@ -249,6 +249,33 @@ plink -pw orangepi -batch orangepi@100.68.70.151 "echo orangepi | sudo -S system
 
 ---
 
+## Sudo jogosultságok (web UI automatizáláshoz)
+
+A web UI egyes funkciói (USB mountolás/leválasztás, biztonságos újraindítás) jelszó nélküli `sudo`-t igényelnek, mert a Python szerver nem tud interaktívan jelszót bekérni.
+
+A szükséges szabály a repóban megtalálható: [`systemd/timelapse-sudoers`](systemd/timelapse-sudoers)
+
+**Telepítés** (egyszer kell elvégezni, vagy újratelepítéskor):
+```bash
+sudo cp /home/orangepi/timelapse/systemd/timelapse-sudoers /etc/sudoers.d/timelapse
+sudo chmod 440 /etc/sudoers.d/timelapse
+sudo visudo -c -f /etc/sudoers.d/timelapse   # szintaxis ellenőrzés
+```
+
+Engedélyezett parancsok (csak ezekre vonatkozik a NOPASSWD):
+
+| Parancs | Miért kell |
+|---|---|
+| `/usr/bin/mount` | USB pendrive mountolása a web UI-ból |
+| `/usr/bin/umount` | USB leválasztása a web UI-ból |
+| `/usr/bin/mkdir` | Mountpont létrehozása (`/mnt/timelapse`) |
+| `/usr/sbin/reboot` | Biztonságos újraindítás gomb |
+| `/usr/bin/systemctl` | Service kezelés (restart, stop, start) |
+
+> **Megjegyzés:** Ha a `timelapse-http` service újraindítása után a web UI USB mount/unmount gombjai nem működnek, ellenőrizd, hogy a fájl létezik-e: `sudo cat /etc/sudoers.d/timelapse`
+
+---
+
 ## WebUI le- és felállítása
 
 A webes felületek leállíthatók anélkül, hogy a timelapse felvétel megszakadna (a cron fut tovább).
