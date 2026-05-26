@@ -1,0 +1,6 @@
+# Timelapse web UI – jelszó nélküli sudo az automatizált műveletekhez
+# Telepítés:
+#   sudo cp timelapse-sudoers /etc/sudoers.d/timelapse
+#   sudo chmod 440 /etc/sudoers.d/timelapse
+#   sudo visudo -c -f /etc/sudoers.d/timelapse
+orangepi ALL=(ALL) NOPASSWD: /usr/bin/mount, /usr/bin/umount, /usr/bin/mkdir, /usr/sbin/reboot, /usr/bin/systemctl
