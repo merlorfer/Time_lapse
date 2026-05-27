@@ -649,9 +649,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if current == USB_MOUNT:
             os.makedirs(os.path.join(SD_BASE, "archive"), exist_ok=True)
             _update_session_storage(SD_BASE)
-        r = subprocess.run(["sudo", "umount", USB_MOUNT], capture_output=True, text=True, timeout=30)
+        subprocess.run(["sync"], capture_output=True, timeout=10)
+        r = subprocess.run(["sudo", "umount", "-l", USB_MOUNT], capture_output=True, text=True, timeout=30)
         if r.returncode == 0:
-            msg = "USB leválasztva, biztonságosan kihúzható."
+            msg = "USB leválasztva (lazy umount). Néhány másodperc múlva biztonságosan kihúzható."
             if current == USB_MOUNT:
                 msg += " Tárhely átváltva SD kártyára."
             self._send_json({"ok": True, "message": msg})
