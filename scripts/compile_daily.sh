@@ -138,41 +138,35 @@ log "Deleted ${DELETED} frames from ramdisk"
 
 # ── Master videó újraépítése archívból ───────────────────────────────────────
 # A master csak akkor épül újra, ha a napi mentés sikeres volt.
-# A DEST_DAILY változó tartalmazza a sikeres mentés elérési útját.
 
-DEST_BASE=$(dirname "$(dirname "$DEST_DAILY")")  # archive szülőkönyvtára
-DEST_ARCHIVE=$(dirname "$DEST_DAILY")
-DEST_MASTER="${DEST_BASE}/master.mp4"
+MASTER_DAYS_ENABLED=$(python3 -c "
+import json, sys
+try:
+    c = json.load(open('${TIMELAPSE_CONFIG}'))
+    print('1' if c.get('master_days_enabled') else '0')
+except: print('0')
+" 2>/dev/null)
 
-log "Rebuilding master.mp4 from archive: $DEST_ARCHIVE"
+MASTER_DAYS=$(python3 -c "
+import json, sys
+try:
+    c = json.load(open('${TIMELAPSE_CONFIG}'))
+    print(int(c.get('master_days', 0)))
+except: print('0')
+" 2>/dev/null)
 
-MASTER_LIST=$(mktemp)
-ls "${DEST_ARCHIVE}/"[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].mp4 2>/dev/null | sort | while IFS= read -r f; do
-    echo "file '$f'"
-done > "$MASTER_LIST"
-
-SEGMENT_COUNT=$(wc -l < "$MASTER_LIST")
-if [ "$SEGMENT_COUNT" -eq 0 ]; then
-    log "No archive segments found, skipping master rebuild"
-    rm -f "$MASTER_LIST"
+if [ "$MASTER_DAYS_ENABLED" = "1" ] && [ "${MASTER_DAYS:-0}" -gt 0 ]; then
+    log "Rebuilding master.mp4 (last ${MASTER_DAYS} days)"
+    MASTER_OUT=$("$SCRIPT_DIR/build_master.sh" --days "$MASTER_DAYS" 2>&1)
 else
-    MASTER_TMP="${DEST_BASE}/master_tmp.mp4"
+    log "Rebuilding master.mp4 (all segments)"
+    MASTER_OUT=$("$SCRIPT_DIR/build_master.sh" 2>&1)
+fi
 
-    ffmpeg -y \
-        -f concat -safe 0 -i "$MASTER_LIST" \
-        -c copy \
-        "$MASTER_TMP" \
-        >> "$LOG" 2>&1
-
-    rm -f "$MASTER_LIST"
-
-    if [ $? -ne 0 ]; then
-        log "WARNING: master rebuild sikertelen (a következő napi futáskor újrapróbálja)"
-    else
-        mv -f "$MASTER_TMP" "$DEST_MASTER"
-        MASTER_SIZE=$(du -sh "$DEST_MASTER" | cut -f1)
-        log "Master rebuilt: $DEST_MASTER (${MASTER_SIZE}, ${SEGMENT_COUNT} segments)"
-    fi
+if [ $? -eq 0 ]; then
+    log "$MASTER_OUT"
+else
+    log "WARNING: master rebuild sikertelen: $MASTER_OUT"
 fi
 
 log "=== Done ==="

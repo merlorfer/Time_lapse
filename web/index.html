@@ -209,7 +209,8 @@ button:disabled { opacity: .35; cursor: not-allowed; }
               style="width:60px;padding:3px 6px;font-size:12px;border-radius:4px;
                      border:1px solid var(--border);background:var(--bg);color:var(--text);
                      display:none"
-              title="Visszamenőleges napok száma">
+              title="Visszamenőleges napok száma"
+              onchange="saveMasterDaysConfig()">
             <span id="master-days-label" style="font-size:12px;color:var(--muted);display:none">nap</span>
           </div>
           <button class="btn-blue" style="width:100%;font-size:12px;padding:6px"
@@ -844,6 +845,11 @@ async function loadSystemConfig() {
     document.getElementById('cfg-reboot-interval').value   = cfg.reboot_interval_days || 7;
     document.getElementById('cfg-reboot-time').value       = cfg.reboot_time || '03:00';
     document.getElementById('cfg-last-reboot').textContent = cfg.last_reboot_date || '–';
+    const masterEnabled = !!cfg.master_days_enabled;
+    document.getElementById('master-days-enabled').checked = masterEnabled;
+    document.getElementById('master-days-input').value     = cfg.master_days || 7;
+    document.getElementById('master-days-input').style.display = masterEnabled ? 'inline-block' : 'none';
+    document.getElementById('master-days-label').style.display = masterEnabled ? 'inline' : 'none';
   } catch(e) {}
 }
 
@@ -852,6 +858,15 @@ function toggleMasterDays() {
   const enabled = document.getElementById('master-days-enabled').checked;
   document.getElementById('master-days-input').style.display = enabled ? 'inline-block' : 'none';
   document.getElementById('master-days-label').style.display = enabled ? 'inline' : 'none';
+  saveMasterDaysConfig();
+}
+
+async function saveMasterDaysConfig() {
+  const enabled = document.getElementById('master-days-enabled').checked;
+  const days = parseInt(document.getElementById('master-days-input').value, 10) || 7;
+  try {
+    await api('/api/system-config', 'POST', { master_days_enabled: enabled, master_days: days });
+  } catch(e) {}
 }
 
 async function buildMaster() {
@@ -951,6 +966,8 @@ async function saveSystemConfig() {
     reboot_enabled:      document.getElementById('cfg-reboot-enabled').checked,
     reboot_interval_days: parseInt(document.getElementById('cfg-reboot-interval').value),
     reboot_time:         document.getElementById('cfg-reboot-time').value,
+    master_days_enabled: document.getElementById('master-days-enabled').checked,
+    master_days:         parseInt(document.getElementById('master-days-input').value) || 7,
   };
   const pw = document.getElementById('cfg-smtp-password').value;
   if (pw) body.smtp_password = pw;

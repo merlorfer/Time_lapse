@@ -49,6 +49,8 @@ _CONFIG_DEFAULTS = {
     "reboot_interval_days": 7,
     "reboot_time":         "03:00",
     "last_reboot_date":    "",
+    "master_days_enabled": False,
+    "master_days":         7,
 }
 
 def load_system_config() -> dict:
@@ -594,6 +596,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 errors.append("Érvénytelen intervallum")
         if "reboot_time" in body and _TIME.match(str(body["reboot_time"])):
             cfg["reboot_time"] = str(body["reboot_time"])
+        if "master_days_enabled" in body:
+            cfg["master_days_enabled"] = bool(body["master_days_enabled"])
+        if "master_days" in body:
+            try:
+                d = int(body["master_days"])
+                if 1 <= d <= 365:
+                    cfg["master_days"] = d
+                else:
+                    errors.append("Master napok 1-365 között legyen")
+            except (ValueError, TypeError):
+                errors.append("Érvénytelen master napok érték")
 
         if errors:
             self._send_json({"ok": False, "errors": errors})
