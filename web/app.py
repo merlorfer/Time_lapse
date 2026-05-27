@@ -34,7 +34,7 @@ ALLOWED_SCRIPTS = {
     "preview_start",   "preview_stop",
     "render_now",      "compile_daily",
     "test_capture",    "test_compile",
-    "safe_reboot",
+    "safe_reboot",     "build_master",
 }
 
 # ── System config helpers ────────────────────────────────────────────────────
@@ -164,6 +164,14 @@ def build_args(script: str, params: dict) -> list[str]:
     elif script == "render_now":
         if "output" in params and params["output"] and _PATH.match(params["output"]):
             args += ["--output", params["output"]]
+    elif script == "build_master":
+        days = params.get("days", 0)
+        try:
+            days = int(days)
+        except (ValueError, TypeError):
+            days = 0
+        if days > 0:
+            args += ["--days", str(days)]
     return args
 
 # ── Video base helper ────────────────────────────────────────────────────────

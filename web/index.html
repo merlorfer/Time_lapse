@@ -198,6 +198,23 @@ button:disabled { opacity: .35; cursor: not-allowed; }
           <button class="btn-yellow" onclick="openModal('render-modal')">🎬 Render most</button>
           <button class="btn-gray"   onclick="runScript('compile_daily')">📅 Napi compile</button>
         </div>
+        <div style="margin-top:10px;padding:10px;background:var(--card-alt,#1e1e2e);border-radius:6px;border:1px solid var(--border)">
+          <div style="font-size:12px;color:var(--muted);margin-bottom:8px;font-weight:600">Master videó újraépítése</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer">
+              <input type="checkbox" id="master-days-enabled" onchange="toggleMasterDays()">
+              Csak az utolsó
+            </label>
+            <input type="number" id="master-days-input" min="1" max="365" value="7"
+              style="width:60px;padding:3px 6px;font-size:12px;border-radius:4px;
+                     border:1px solid var(--border);background:var(--bg);color:var(--text);
+                     display:none"
+              title="Visszamenőleges napok száma">
+            <span id="master-days-label" style="font-size:12px;color:var(--muted);display:none">nap</span>
+          </div>
+          <button class="btn-blue" style="width:100%;font-size:12px;padding:6px"
+            onclick="buildMaster()">📼 Master újraépítése</button>
+        </div>
       </div>
       <div>
         <div class="card-title" style="margin-bottom:8px">Teszt</div>
@@ -828,6 +845,23 @@ async function loadSystemConfig() {
     document.getElementById('cfg-reboot-time').value       = cfg.reboot_time || '03:00';
     document.getElementById('cfg-last-reboot').textContent = cfg.last_reboot_date || '–';
   } catch(e) {}
+}
+
+// ── Master build ─────────────────────────────────────────────────────────────
+function toggleMasterDays() {
+  const enabled = document.getElementById('master-days-enabled').checked;
+  document.getElementById('master-days-input').style.display = enabled ? 'inline-block' : 'none';
+  document.getElementById('master-days-label').style.display = enabled ? 'inline' : 'none';
+}
+
+async function buildMaster() {
+  const enabled = document.getElementById('master-days-enabled').checked;
+  const days = enabled ? parseInt(document.getElementById('master-days-input').value, 10) || 0 : 0;
+  const msg = days > 0
+    ? `Újraépíted a master videót az utolsó ${days} nap szegmenseiből?\n\nA meglévő master.mp4 felülíródik.`
+    : 'Újraépíted a master videót az összes archív szegmensből?\n\nA meglévő master.mp4 felülíródik.';
+  if (!confirm(msg)) return;
+  await runScript('build_master', days > 0 ? { days } : {});
 }
 
 // ── Storage management ───────────────────────────────────────────────────────
