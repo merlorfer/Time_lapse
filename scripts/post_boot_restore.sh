@@ -6,6 +6,7 @@
 
 SCRIPT_DIR="/home/orangepi/timelapse/scripts"
 PRE_REBOOT_STATE="/home/orangepi/timelapse/pre_reboot_state.json"
+LAST_SESSION="/home/orangepi/timelapse/last_session.json"
 TIMELAPSE_CONFIG="/home/orangepi/timelapse/timelapse_config.json"
 LOG="/home/orangepi/timelapse/logs/restore.log"
 USB_MOUNT="/mnt/timelapse"
@@ -18,31 +19,56 @@ mkdir -p "$(dirname "$LOG")"
 
 log "=== post_boot_restore.sh indítva ==="
 
-# Ha nincs pre_reboot_state.json, normál boot, nincs teendő
-if [ ! -f "$PRE_REBOOT_STATE" ]; then
-    log "Nincs pre_reboot_state.json – normál boot, kihagyva"
-    exit 0
-fi
-
-log "pre_reboot_state.json megtalálva, visszaállítás kezdődik"
-
-# Értékek kiolvasása a JSON-ból (python3 stdlib)
-read_json() {
+# Értékek kiolvasása egy JSON fájlból (python3 stdlib)
+read_json_field() {
+    local file="$1" field="$2"
     python3 -c "
-import json, sys
+import json
 try:
-    d = json.load(open('$PRE_REBOOT_STATE'))
-    print(d.get('$1', ''))
+    d = json.load(open('${file}'))
+    print(d.get('${field}', ''))
 except Exception:
     print('')
 "
 }
 
-TL_ACTIVE=$(read_json timelapse_active)
-SESSION_START=$(read_json session_start)
-SESSION_END=$(read_json session_end)
-SESSION_INTERVAL=$(read_json session_interval)
-SESSION_STORAGE=$(read_json session_storage)
+# ── Forrás meghatározása: tervezett reboot vagy áramszünet utáni visszaállítás ─
+STATE_FILE=""
+STATE_SOURCE=""
+
+if [ -f "$PRE_REBOOT_STATE" ]; then
+    STATE_FILE="$PRE_REBOOT_STATE"
+    STATE_SOURCE="tervezett reboot (pre_reboot_state.json)"
+elif [ -f "$LAST_SESSION" ]; then
+    # Áramszünet eset: csak akkor állítjuk vissza, ha aktív volt
+    WAS_ACTIVE=$(read_json_field "$LAST_SESSION" active)
+    if [ "$WAS_ACTIVE" = "True" ] || [ "$WAS_ACTIVE" = "true" ]; then
+        STATE_FILE="$LAST_SESSION"
+        STATE_SOURCE="áramszünet utáni visszaállítás (last_session.json)"
+        log "Áramszünet detektálva – last_session.json alapján visszaállítás"
+        send_alert "Timelapse áramszünet után visszaállva" \
+            "Áramszünet vagy váratlan leállás után a timelapse automatikusan visszaállt a mentett paraméterekkel. Rendszer: $(hostname)"
+    else
+        log "Nincs visszaállítani való (last_session.json active=false) – normál boot"
+        exit 0
+    fi
+else
+    log "Nincs pre_reboot_state.json és last_session.json sem – normál boot, kihagyva"
+    exit 0
+fi
+
+log "${STATE_SOURCE} – visszaállítás kezdődik"
+
+TL_ACTIVE=$(read_json_field "$STATE_FILE" timelapse_active)
+SESSION_START=$(read_json_field "$STATE_FILE" session_start)
+SESSION_END=$(read_json_field "$STATE_FILE" session_end)
+SESSION_INTERVAL=$(read_json_field "$STATE_FILE" session_interval)
+SESSION_STORAGE=$(read_json_field "$STATE_FILE" session_storage)
+
+# last_session.json-ból az active mező neve "active", nem "timelapse_active"
+if [ -z "$TL_ACTIVE" ]; then
+    TL_ACTIVE=$(read_json_field "$STATE_FILE" active)
+fi
 
 log "Mentett állapot: timelapse_active=$TL_ACTIVE, start=$SESSION_START, end=$SESSION_END, interval=$SESSION_INTERVAL, storage=$SESSION_STORAGE"
 
@@ -111,7 +137,10 @@ else
     log "Timelapse nem volt aktív leállás előtt – nem indítjuk újra"
 fi
 
-# ── pre_reboot_state.json törlése ────────────────────────────────────────────
-rm -f "$PRE_REBOOT_STATE"
-log "pre_reboot_state.json törölve"
+# ── Takarítás ────────────────────────────────────────────────────────────────
+if [ -f "$PRE_REBOOT_STATE" ]; then
+    rm -f "$PRE_REBOOT_STATE"
+    log "pre_reboot_state.json törölve"
+fi
+# last_session.json marad – a következő stop_timelapse.sh írja active=false-ra
 log "=== Visszaállítás kész ==="
