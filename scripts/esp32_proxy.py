@@ -607,6 +607,12 @@ def endpoint_to_cmd(method: str, path: str, body: dict):
     if path == "/api/rules/reset":
         return "reset_rules", {}
 
+    if path == "/api/rules/exec":
+        return "exec_rules_cmd", body
+
+    if path == "/api/devices/virtual":
+        return "add_virtual_device", body
+
     if path == "/api/logs/live":
         return "get_logs_live", {"lines": 50}
 

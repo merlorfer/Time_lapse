@@ -1093,3 +1093,256 @@ select:focus {
 
     .rules-header-actions { flex-direction: column; align-items: flex-start; }
 }
+
+/* Sensor card — value display */
+.sensor-device {
+    border-left: 4px solid var(--primary-color);
+}
+
+.sensor-value-display {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    margin: 8px 0 4px;
+}
+
+.sensor-value-number {
+    font-size: 1.8rem;
+    font-weight: bold;
+    color: var(--primary-color);
+}
+
+.sensor-value-unit {
+    font-size: 1rem;
+    color: var(--text-light);
+}
+
+/* Battery bar */
+.sensor-battery {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.battery-bar-bg {
+    width: 36px;
+    height: 14px;
+    background: var(--border-color);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.battery-bar {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s;
+}
+
+.battery-high { background-color: var(--success-color); }
+.battery-mid  { background-color: var(--warning-color); }
+.battery-low  { background-color: var(--danger-color); }
+
+.battery-percent, .battery-voltage {
+    font-size: 0.8rem;
+    color: var(--text-light);
+}
+
+/* Modal — sensor current value header */
+.sensor-current-value {
+    text-align: center;
+    padding: 14px;
+    background: linear-gradient(135deg, var(--primary-color), var(--primary-dark));
+    border-radius: 8px;
+    color: white;
+    margin-bottom: 15px;
+}
+
+.sensor-current-value .sensor-value-number {
+    color: white;
+    font-size: 2.2rem;
+}
+
+.sensor-current-value .sensor-value-unit {
+    color: rgba(255,255,255,0.85);
+    font-size: 1.2rem;
+}
+
+/* Threshold groups in modal */
+.threshold-group {
+    background: var(--bg-color);
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 12px;
+}
+
+.threshold-group h3 {
+    font-size: 0.95rem;
+    color: var(--text-color);
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+
+.threshold-group .form-group {
+    margin-bottom: 8px;
+}
+
+.threshold-group .form-group:last-child {
+    margin-bottom: 0;
+}
+
+.threshold-logic {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 10px;
+    font-size: 0.8rem;
+    font-family: monospace;
+}
+
+.threshold-logic .logic-on {
+    padding: 3px 8px;
+    background-color: #d4edda;
+    color: #155724;
+    border-radius: 3px;
+}
+
+.threshold-logic .logic-off {
+    padding: 3px 8px;
+    background-color: #f8d7da;
+    color: #721c24;
+    border-radius: 3px;
+}
+
+/* Sensor-controlled ON/OFF device */
+.device-item.sensor-controlled {
+    border-left: 4px solid var(--warning-color);
+}
+
+.sensor-control-info {
+    font-size: 0.8rem;
+    color: var(--text-light);
+    margin: 2px 0;
+}
+
+.sensor-control-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    background-color: #fff3cd;
+    color: #856404;
+    border-radius: 3px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    margin-left: 4px;
+}
+
+.state-sensor {
+    background-color: var(--warning-color);
+    color: white;
+}
+
+.sensor-control-warning {
+    background-color: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffc107;
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+/* Inline radio buttons */
+.inline-radio {
+    display: flex;
+    gap: 24px;
+}
+
+.inline-radio label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: normal;
+    cursor: pointer;
+}
+
+.inline-radio input[type="radio"] {
+    width: auto;
+}
+
+/* Toggle Switch */
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 26px;
+    flex-shrink: 0;
+}
+
+.switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.switch .slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: var(--border-color);
+    transition: .3s;
+}
+
+.switch .slider.round {
+    border-radius: 26px;
+}
+
+.switch .slider:before {
+    position: absolute;
+    content: "";
+    height: 20px;
+    width: 20px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: .3s;
+    border-radius: 50%;
+}
+
+.switch input:checked + .slider {
+    background-color: var(--primary-color);
+}
+
+.switch input:checked + .slider:before {
+    transform: translateX(24px);
+}
+
+.toggle-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.warning-box {
+    background: rgba(243, 156, 18, 0.12);
+    border: 1px solid var(--warning-color);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-top: 10px;
+    color: var(--warning-color);
+    font-size: 0.88em;
+    line-height: 1.4;
+}
+
+.form-select {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    font-size: 0.95em;
+    background: var(--card-bg);
+    color: var(--text-color);
+}
