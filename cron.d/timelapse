@@ -2,6 +2,7 @@
 # Telepítés: sudo cp timelapse /etc/cron.d/ && sudo chmod 644 /etc/cron.d/timelapse
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+TZ=Europe/Budapest
 
 # Képrögzítés: percenként (az időablakot capture.sh kezeli belülről: 06:00–20:00)
 * * * * * orangepi /home/orangepi/timelapse/scripts/capture.sh
