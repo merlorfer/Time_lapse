@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="ESP32-C6 Zigbee Gateway Configuration">
+    <meta name="theme-color" content="#0f3460">
+    <title>ESP32-C6 Zigbee Gateway</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="manifest" href="manifest.json">
+</head>
+<body>
+    <!-- Sticky BLE Status Bar -->
+    <div class="sticky-ble-bar">
+        <div class="ble-status">
+            <span id="sticky-ble-indicator" class="status-dot disconnected"></span>
+            <span id="sticky-ble-text">BLE: Nincs csatlakozva</span>
+        </div>
+        <div class="ble-actions">
+            <button onclick="connectBLE()" id="sticky-ble-connect-btn" class="btn btn-primary btn-small">BLE Csatlakozas</button>
+            <button onclick="disconnectBLE()" id="sticky-ble-disconnect-btn" class="btn btn-secondary btn-small hidden">Kapcsolat bontasa</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <header>
+            <h1>Zigbee Gateway</h1>
+            <div class="status-bar">
+                <span id="status-indicator" class="status-dot"></span>
+                <span id="status-text">Csatlakozas...</span>
+            </div>
+        </header>
+
+        <main>
+            <!-- Device Control Panel -->
+            <section class="card control-panel-card">
+                <div class="control-panel-buttons">
+                    <button onclick="rebootDevice()" class="btn btn-danger btn-small">Ujrainditas</button>
+                    <button onclick="switchMode()" class="btn btn-secondary btn-small" id="mode-switch-btn">Uzemmod valtas</button>
+                    <button onclick="startPairing()" class="btn btn-primary btn-small" id="pairing-btn">Parositas</button>
+                </div>
+            </section>
+
+            <!-- BLE Connection Section -->
+            <section class="card ble-card" id="ble-section">
+                <h2>Bluetooth Kapcsolat</h2>
+                <p class="hint">A PWA telepitese utan kozvetlenul Bluetooth-on keresztul is csatlakozhatsz az ESP32-hoz (WiFi nelkul)</p>
+                <div class="ble-status" id="ble-status">
+                    <span id="ble-indicator" class="status-dot disconnected"></span>
+                    <span id="ble-text">Nincs csatlakozva</span>
+                </div>
+                <button onclick="connectBLE()" id="ble-connect-btn" class="btn btn-primary">Csatlakozas Bluetooth-on</button>
+                <button onclick="disconnectBLE()" id="ble-disconnect-btn" class="btn btn-secondary hidden">Kapcsolat bontasa</button>
+            </section>
+
+            <!-- System Clock Section -->
+            <section class="card">
+                <h2>Rendszerora</h2>
+                <div class="clock-container">
+                    <div class="clock-column">
+                        <div class="clock-label">ESP ido:</div>
+                        <div class="clock-display">
+                            <span id="esp-time">--:--:--</span>
+                            <span id="esp-date">----.--.--</span>
+                        </div>
+                    </div>
+                    <div class="clock-column">
+                        <div class="clock-label">Host ido:</div>
+                        <div class="clock-display host-clock">
+                            <span id="current-time">--:--:--</span>
+                            <span id="current-date">----.--.--</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="rtc-status" id="rtc-status"></div>
+                <div class="rtc-actions">
+                    <button onclick="syncRtc()" class="btn btn-success">Szinkronizalas most</button>
+                </div>
+                <div class="form-group manual-rtc">
+                    <label for="datetime-input">Manualis beallitas:</label>
+                    <input type="datetime-local" id="datetime-input">
+                    <button onclick="setRtc()" class="btn btn-secondary btn-small">Beallitas</button>
+                </div>
+            </section>
+
+            <!-- Zigbee Devices Section -->
+            <section class="card">
+                <div class="section-header">
+                    <h2>Zigbee Eszkozok</h2>
+                    <button onclick="refreshDevices()" class="btn btn-secondary btn-small" id="refresh-devices-btn">Frissites</button>
+                </div>
+                <p class="hint">Eszkoz hozzaadasahoz nyomja meg hosszan a gombot az ESP-n (Zigbee modban)</p>
+                <div id="device-list" class="device-list">
+                    <p class="no-devices">Nincs csatlakozott eszkoz</p>
+                </div>
+
+                <!-- Virtual actuator add -->
+                <details style="margin-top:1rem;">
+                    <summary style="cursor:pointer;font-weight:600;color:#2980b9;">+ Virtualis aktuator hozzaadasa</summary>
+                    <div style="margin-top:0.75rem;padding:0.75rem;background:#f8f9fa;border-radius:6px;">
+                        <div class="form-group">
+                            <label for="new-virtual-name">Nev:</label>
+                            <input type="text" id="new-virtual-name" placeholder="pl. Ontozovezerlő">
+                        </div>
+                        <div class="form-group">
+                            <label for="new-virtual-on">BE parancs:</label>
+                            <input type="text" id="new-virtual-on" placeholder="pl. set var4 1">
+                        </div>
+                        <div class="form-group">
+                            <label for="new-virtual-off">KI parancs:</label>
+                            <input type="text" id="new-virtual-off" placeholder="pl. set var4 0">
+                        </div>
+                        <button onclick="addVirtualDevice()" class="btn btn-primary btn-small">Letrehozas</button>
+                    </div>
+                </details>
+            </section>
+
+            <!-- Global Settings Section -->
+            <section class="card">
+                <h2>Globalis Beallitasok</h2>
+
+                <!-- Local XKC Sensor Toggle -->
+                <div class="form-group">
+                    <div class="toggle-label">
+                        <span>Helyi XKC vizszint szenzor:</span>
+                        <label class="switch">
+                            <input type="checkbox" id="xkc-enabled" onchange="onXkcToggleChange()">
+                            <span class="slider round"></span>
+                        </label>
+                    </div>
+                    <small class="hint">Kozvetlenul a koordinator GPIO-hoz csatlakoztatott XKC szenzorok</small>
+                </div>
+
+                <!-- GPIO Pin Selection (shown only when toggle is ON) -->
+                <div id="xkc-gpio-settings" class="hidden">
+                    <div class="form-group">
+                        <label for="xkc-gpio-lower">Also szenzor GPIO:</label>
+                        <select id="xkc-gpio-lower" class="form-select"></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="xkc-gpio-upper">Felso szenzor GPIO:</label>
+                        <select id="xkc-gpio-upper" class="form-select"></select>
+                    </div>
+                    <div class="warning-box">
+                        &#9888; A GPIO labak modositasa hardware csatlakozast igenyel.
+                        Ellenorizze, hogy a szenzorok a megfelelo labakra vannak kotve!
+                    </div>
+                </div>
+
+                <button onclick="saveGlobalConfig()" class="btn btn-primary" style="margin-top:10px">Beallitasok mentese</button>
+            </section>
+
+            <!-- Rules Engine Section -->
+            <section class="card">
+                <div class="section-header">
+                    <h2>Szabalyok</h2>
+                    <div class="rules-header-actions">
+                        <label class="rules-enabled-label">
+                            <input type="checkbox" id="rules-enabled" onchange="onRulesEnabledChange()">
+                            Szabalyok futtatasa
+                        </label>
+                        <button onclick="resetRulesEngine()" class="btn btn-danger btn-small" title="Torol minden szabalyt es valtozo-konfigot az NVS-bol">Reset</button>
+                        <button onclick="toggleRulesEditor()" class="btn btn-secondary btn-small" id="rules-toggle-btn">Szerkesztes</button>
+                    </div>
+                </div>
+                <p class="hint">Szabalyok. Eszkozneveknel ne hasznaljon szokozoket (hasznaljon _ jelet).</p>
+
+                <div id="rules-status-bar" class="rules-status-bar">
+                    <span id="rules-count">0 szabaly betoltve</span>
+                </div>
+
+                <!-- Rules Editor (hidden by default) -->
+                <div id="rules-editor-section" class="hidden">
+                    <div class="rules-info">
+                        <details>
+                            <summary>Szintaxis segitseg</summary>
+                            <pre>on SensorNev do
+  if [SensorNev] &lt; 18 and [hour] &gt;= 6
+    on Eszkoz
+  else
+    off Eszkoz
+  endif
+endon
+
+on timer 1 do
+  off Pump
+endon
+
+on boot do
+  set var1 0
+endon
+
+on time 18:00 do
+  on Light
+endon
+
+// Parancsok: on/off/toggle Eszkoz
+// Timer: timerSet N mp, timerCancel N
+// Valtozo: set var1 ertek
+// Ertekek: [SensorNev] [var1] [hour]
+//          [minute] [uptime]
+// Operatorok: &lt; &gt; &lt;= &gt;= = !=
+// Logika: and, or, not</pre>
+                        </details>
+                    </div>
+                    <textarea id="rules-editor" rows="12" spellcheck="false" placeholder="// Ide irja a szabalyokat..."></textarea>
+                    <div class="rules-toolbar">
+                        <button onclick="saveRules()" class="btn btn-primary btn-small">Mentes</button>
+                        <span id="rules-save-status"></span>
+                    </div>
+                </div>
+
+                <!-- Rules Variables -->
+                <div id="rules-vars-section">
+                    <h3 class="rules-subheader">Valtozok</h3>
+                    <div id="rules-vars-list" class="rules-cards"></div>
+                </div>
+
+                <!-- Rules Timers -->
+                <div id="rules-timers-section">
+                    <h3 class="rules-subheader">Timerek</h3>
+                    <div id="rules-timers-list" class="rules-cards"></div>
+                </div>
+
+                <!-- Rules command exec -->
+                <div style="margin-top:1rem;">
+                    <h3 class="rules-subheader">Parancs azonnali futtatasa</h3>
+                    <p class="hint">Pl: <code>set var1 99</code> &nbsp;|&nbsp; <code>timerSet 1 60</code> &nbsp;|&nbsp; <code>on Lampa</code></p>
+                    <div style="display:flex;gap:0.5rem;align-items:center;">
+                        <input type="text" id="rules-exec-cmd" placeholder="set var1 1" style="flex:1;">
+                        <button onclick="execRulesCmd()" class="btn btn-primary btn-small">Futtat</button>
+                    </div>
+                    <div id="rules-exec-result" style="margin-top:6px;font-size:0.85em;"></div>
+                </div>
+            </section>
+
+            <!-- Mode Control Info Section -->
+            <section class="card action-card">
+                <h2>Vezerles</h2>
+                <div class="info-box">
+                    <p><strong>GPIO9 gomb hasznalata:</strong></p>
+                    <ul class="info-list">
+                        <li><strong>Elso nyomas:</strong> WiFi+BLE → Zigbee mod (inditas)</li>
+                        <li><strong>Rovid nyomas:</strong> BLE ki/be kapcsolas (Zigbee fut)</li>
+                        <li><strong>Hosszu nyomas (&ge;3 mp):</strong> Zigbee parositas aktivitas (60 mp)</li>
+                    </ul>
+                </div>
+                <p class="hint">Bluetooth csatlakozashoz nyomd meg a gombot BLE mod aktivalasakor</p>
+                <hr class="divider">
+                <button onclick="factoryReset()" class="btn btn-danger">Gyari alaphelyzetbe allitas</button>
+                <p class="hint warning">Torli az osszes eszkozt es beallitast!</p>
+            </section>
+
+            <!-- Log viewer section -->
+            <section class="card" id="logs-section">
+                <h2>Rendszernaplo</h2>
+                <div class="log-tab-bar">
+                    <button class="log-tab-btn active" onclick="showLogTab('live')" id="log-tab-btn-live">Elo naplo</button>
+                    <button class="log-tab-btn" onclick="showLogTab('history')" id="log-tab-btn-history">Elozmények</button>
+                </div>
+
+                <!-- Live log tab -->
+                <div id="log-tab-live">
+                    <div id="live-log-box" class="log-box"></div>
+                    <div class="log-controls">
+                        <label><input type="checkbox" id="log-autoscroll" checked> Auto-scroll</label>
+                        <label><input type="checkbox" id="log-zigbee-only" onchange="onLogFilterChange()"> Csak Zigbee logok</label>
+                        <button class="btn btn-secondary btn-small" onclick="clearLiveDisplay()">Kijelzo torlese</button>
+                    </div>
+                </div>
+
+                <!-- History tab -->
+                <div id="log-tab-history" class="hidden">
+                    <div id="log-history-ble-msg" class="hint hidden">
+                        BLE uzemmodban az elozmeny naplo nem elheto el. Kapcsoljon WiFi-re.
+                    </div>
+                    <div id="log-history-wifi-content">
+                        <select id="history-session-select" onchange="loadHistoryContent()">
+                            <option value="">&#8212; Session valasztasa &#8212;</option>
+                        </select>
+                        <div id="history-log-box" class="log-box"></div>
+                        <button class="btn btn-danger btn-small" onclick="clearLogHistory()" style="margin-top:6px">Elozmények torlese</button>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Device Config Modal -->
+        <div id="device-modal" class="modal hidden">
+            <div class="modal-content">
+                <span class="close" onclick="closeModal()">&times;</span>
+                <h2>Eszkoz beallitasa</h2>
+                <form id="device-form">
+                    <input type="hidden" id="edit-ieee-addr">
+
+                    <div class="form-group">
+                        <label for="edit-name">Egyedi nev:</label>
+                        <input type="text" id="edit-name" maxlength="31">
+                    </div>
+
+                    <input type="hidden" id="edit-device-type">
+
+                    <!-- ON/OFF device settings -->
+                    <div id="onoff-settings">
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="edit-enabled">
+                                Automatizacio engedelyezve
+                            </label>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Mukodesi mod:</label>
+                            <div style="display:flex;gap:1.5rem;margin-top:4px;">
+                                <label><input type="checkbox" id="edit-mode-fixed" onchange="onModeChange()"> Fix idopont</label>
+                                <label><input type="checkbox" id="edit-mode-delay" onchange="onModeChange()"> Ismetles (delay)</label>
+                            </div>
+                            <small class="hint" id="interval-mode-hint" style="display:none;color:#e67e22;">
+                                &#9201; Interval mod: a delay ciklus csak az idoablak(ok)on belul fut, kulonben KI.
+                            </small>
+                        </div>
+
+                        <!-- Fixed Time Mode Settings -->
+                        <div id="fixed-time-settings" class="hidden">
+                            <div id="time-pairs-container"></div>
+                            <button type="button" onclick="addTimePair()" class="btn btn-secondary btn-small">
+                                + Uj idopont hozzaadasa
+                            </button>
+                        </div>
+
+                        <!-- Delay Mode Settings -->
+                        <div id="delay-settings" class="hidden">
+                            <p class="hint">3-fazisu ciklus: OFF1 → ON → OFF2 → ismetles</p>
+                            <div class="form-group">
+                                <label for="edit-delay-off1">OFF1 idotartam (perc):</label>
+                                <input type="number" id="edit-delay-off1" min="0" max="1440" value="0">
+                                <small class="hint">Kesleltetes az ON elott (lehet 0)</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="edit-delay-duration">ON idotartam (perc):</label>
+                                <input type="number" id="edit-delay-duration" min="1" max="1440" value="120">
+                                <small class="hint">Meddig legyen bekapcsolva</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="edit-delay-off2">OFF2 idotartam (perc):</label>
+                                <input type="number" id="edit-delay-off2" min="0" max="1440" value="30">
+                                <small class="hint">Kesleltetes az ON utan (lehet 0)</small>
+                            </div>
+                        </div>
+
+                        <!-- Virtual actuator commands -->
+                        <div id="virtual-cmd-settings" class="hidden">
+                            <div class="form-group">
+                                <label for="edit-virtual-on-cmd">BE parancs (rules engine):</label>
+                                <input type="text" id="edit-virtual-on-cmd" placeholder="pl. set var4 1">
+                            </div>
+                            <div class="form-group">
+                                <label for="edit-virtual-off-cmd">KI parancs (rules engine):</label>
+                                <input type="text" id="edit-virtual-off-cmd" placeholder="pl. set var4 0">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Sensor device settings -->
+                    <div id="sensor-settings" class="hidden">
+                        <div class="sensor-current-value">
+                            <span class="sensor-value-number" id="edit-current-value">--</span>
+                            <span class="sensor-value-unit" id="edit-value-unit">&#176;C</span>
+                        </div>
+
+                        <div class="threshold-group">
+                            <h3 id="lower-threshold-title">Also korlat (futes)</h3>
+                            <div class="threshold-logic" id="lower-threshold-logic"></div>
+                            <div class="form-group" id="lower-threshold-form">
+                                <label for="edit-lower-threshold">Hatarertek:</label>
+                                <input type="number" id="edit-lower-threshold" step="0.1" value="18.0" oninput="updateThresholdLogicDisplay()">
+                            </div>
+                            <div class="form-group" id="lower-hysteresis-form">
+                                <label for="edit-lower-hysteresis">Hiszterezis:</label>
+                                <input type="number" id="edit-lower-hysteresis" step="0.1" min="0" value="0.5" oninput="updateThresholdLogicDisplay()">
+                            </div>
+                            <div class="form-group" id="lower-delay-form">
+                                <label for="edit-lower-delay">Kesleltetes (mp):</label>
+                                <input type="number" id="edit-lower-delay" min="0" max="3600" step="1" value="0" oninput="updateThresholdLogicDisplay()">
+                                <small class="hint">0 = azonnali bekapcsolas</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="edit-lower-linked">Kapcsolt eszkoz:</label>
+                                <select id="edit-lower-linked"></select>
+                            </div>
+                        </div>
+
+                        <div class="threshold-group">
+                            <h3 id="upper-threshold-title">Felso korlat (hutes)</h3>
+                            <div class="threshold-logic" id="upper-threshold-logic"></div>
+                            <div class="form-group" id="upper-threshold-form">
+                                <label for="edit-upper-threshold">Hatarertek:</label>
+                                <input type="number" id="edit-upper-threshold" step="0.1" value="25.0" oninput="updateThresholdLogicDisplay()">
+                            </div>
+                            <div class="form-group" id="upper-hysteresis-form">
+                                <label for="edit-upper-hysteresis">Hiszterezis:</label>
+                                <input type="number" id="edit-upper-hysteresis" step="0.1" min="0" value="0.5" oninput="updateThresholdLogicDisplay()">
+                            </div>
+                            <div class="form-group" id="upper-delay-form">
+                                <label for="edit-upper-delay">Kesleltetes (mp):</label>
+                                <input type="number" id="edit-upper-delay" min="0" max="3600" step="1" value="0" oninput="updateThresholdLogicDisplay()">
+                                <small class="hint">0 = azonnali bekapcsolas</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="edit-upper-linked">Kapcsolt eszkoz:</label>
+                                <select id="edit-upper-linked"></select>
+                            </div>
+                        </div>
+
+                        <div class="threshold-group">
+                            <h3>Hibakezelés</h3>
+                            <div class="form-group">
+                                <label for="edit-timeout">Timeout (mp):</label>
+                                <input type="number" id="edit-timeout" min="10" max="3600" value="60">
+                            </div>
+                            <div class="form-group">
+                                <label for="edit-error-linked">Hiba-eszkoz:</label>
+                                <select id="edit-error-linked" onchange="updateErrorActionVisibility()"></select>
+                            </div>
+                            <div class="form-group hidden" id="error-action-group">
+                                <label>Hibakkor:</label>
+                                <div class="inline-radio">
+                                    <label><input type="radio" name="error-action" value="on"> BE</label>
+                                    <label><input type="radio" name="error-action" value="off" checked> KI</label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="threshold-group" id="report-settings-group">
+                            <h3>Jelentesi beallitasok</h3>
+                            <div class="form-group">
+                                <label for="edit-report-min">Min. idokoz (mp):</label>
+                                <input type="number" id="edit-report-min" min="0" max="65535" value="0">
+                            </div>
+                            <div class="form-group">
+                                <label for="edit-report-max">Max. idokoz (mp):</label>
+                                <input type="number" id="edit-report-max" min="1" max="65535" value="10">
+                            </div>
+                            <div class="form-group">
+                                <label for="edit-report-change">Jelentendo valtozas:</label>
+                                <input type="number" id="edit-report-change" min="1" max="32767" value="50" oninput="updateReportChangeDisplay()">
+                                <small class="hint">= <span id="report-change-display">0.50</span> <span id="report-change-unit">egyseg</span></small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="modal-actions">
+                        <button type="button" onclick="saveDeviceConfig()" class="btn btn-primary">Mentes</button>
+                        <button type="button" onclick="closeModal()" class="btn btn-secondary">Megse</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Toast Notification -->
+        <div id="toast" class="toast hidden"></div>
+    </div>
+
+    <script src="ble-service.js"></script>
+    <script src="script.js"></script>
+    <script src="proxy-patch.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/service-worker.js')
+                    .catch(err => console.log('SW registration failed:', err));
+            });
+        }
+    </script>
+</body>
+</html>

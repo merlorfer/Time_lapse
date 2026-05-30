@@ -27,7 +27,7 @@ if [ -f "$LAST_CAPTURE_FILE" ]; then
     LAST_TS=$(cat "$LAST_CAPTURE_FILE")
     NOW_TS=$(date +%s)
     ELAPSED=$(( NOW_TS - LAST_TS ))
-    if [ "$ELAPSED" -lt "$CAPTURE_INTERVAL" ]; then
+    if [ "$ELAPSED" -lt $(( CAPTURE_INTERVAL - 5 )) ]; then
         exit 0
     fi
 fi

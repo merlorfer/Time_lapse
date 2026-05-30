@@ -1,0 +1,16 @@
+[Unit]
+Description=ESP32C6 Serial Monitor (screen → /tmp/esp32_serial.log)
+After=dev-ttyACM0.device
+BindsTo=dev-ttyACM0.device
+
+[Service]
+Type=forking
+User=orangepi
+ExecStart=/usr/bin/screen -dmS esp32serial -L -Logfile /tmp/esp32_serial.log /dev/ttyACM0 115200
+ExecStartPost=/bin/sh -c 'sleep 1 && screen -S esp32serial -X logfile flush 1'
+ExecStop=/usr/bin/screen -S esp32serial -X quit
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=dev-ttyACM0.device

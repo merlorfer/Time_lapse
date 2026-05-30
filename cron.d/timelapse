@@ -8,3 +8,6 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
 # Napi videó fordítás: éjfél után 5 perccel (az előző nap képkockáiból)
 5 0 * * * orangepi /home/orangepi/timelapse/scripts/compile_daily.sh
+
+# Ütemezett reboot ellenőrzés: óránként (a reboot időpontja a timelapse_config.json-ban állítható)
+0 * * * * orangepi /home/orangepi/timelapse/scripts/check_scheduled_reboot.sh

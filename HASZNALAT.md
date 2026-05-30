@@ -70,6 +70,32 @@ Böngészőben: **http://192.168.68.177:8080/**
 
 ---
 
+## Pendrive biztonságos ki- és visszadugása
+
+Nap közben a rendszer mindent a ramdiskre rögzít (`/tmp/timelapse_frames`, `/tmp/sensor_data`), így a pendrive bármikor kiszedható – a felvételek nem szakadnak meg.
+
+**Kiszedés előtt** – biztonságos leválasztás:
+```bash
+sudo umount /mnt/timelapse
+```
+
+Ha "target is busy" hibát ír (pl. épp compile fut):
+```bash
+sudo lsof /mnt/timelapse   # mi tartja nyitva
+```
+Várj, amíg a folyamat véget ér, majd próbáld újra. Ezután a pendrive fizikailag kihúzható.
+
+**Visszadugás után** – újramountolás:
+```bash
+sudo mount /mnt/timelapse
+```
+
+A rendszer automatikusan érzékeli: ha `/mnt/timelapse` mountolva és írható, azt használja; ha nincs, az SD kártyára ment. Visszadugás után az éjféli compile és a szenzor backup ismét a pendrive-ra kerül.
+
+> Alternatíva: használd az interaktív `storage_select.sh` scriptet (lásd lentebb).
+
+---
+
 ## Tárhely átváltása (ha pendrive nem volt bent bootoláskor)
 
 ```bash
@@ -109,6 +135,159 @@ sudo systemctl stop timelapse-http
 sudo systemctl disable timelapse-http
 sudo rm /etc/systemd/system/timelapse-http.service
 sudo systemctl daemon-reload
+```
+
+---
+
+## ESP32C6 vezérlőfelület (BLE proxy)
+
+Az Orange Pi BLE-n keresztül csatlakozik az ESP32C6 Zigbee koordinátorhoz, és böngészőből elérhető webes felületet biztosít.
+
+**Elérés:** http://100.68.70.151:8083/  (NordVPN Meshnet)
+
+Bootoláskor automatikusan indul. Az ESP32C6-ot **nem kell USB-n csatlakoztatni** – BLE-n keresztül kommunikál.
+
+```bash
+# Státusz
+systemctl status esp32-proxy
+
+# Újraindítás
+sudo systemctl restart esp32-proxy
+
+# BLE kapcsolat állapota
+journalctl -u esp32-proxy -n 20
+
+# Le/felállítás
+sudo systemctl stop esp32-proxy
+sudo systemctl start esp32-proxy
+```
+
+**Megjegyzés:** Ha az ESP32C6 nem elérhető, a proxy 503-as hibaüzenetet ad vissza. Az ESP32C6 újraindítása után a proxy automatikusan visszacsatlakozik.
+
+**Eltávolítás:**
+```bash
+sudo systemctl stop esp32-proxy
+sudo systemctl disable esp32-proxy
+sudo rm /etc/systemd/system/esp32-proxy.service
+sudo systemctl daemon-reload
+```
+
+---
+
+## ESP32C6 firmware frissítése (távoli flash)
+
+Az ESP32C6 az Orange Pi USB portjára csatlakoztatva távolról is felflashelhető.
+
+**Előkészítés** – másold fel az új firmware fájlokat az Orange Pi-re:
+```bash
+pscp -pw orangepi build/bootloader/bootloader.bin           orangepi@100.68.70.151:/home/orangepi/esp32firmware/
+pscp -pw orangepi build/partition_table/partition-table.bin  orangepi@100.68.70.151:/home/orangepi/esp32firmware/
+pscp -pw orangepi build/esp32c6_zigbee_gateway.bin           orangepi@100.68.70.151:/home/orangepi/esp32firmware/
+pscp -pw orangepi build/storage.bin                          orangepi@100.68.70.151:/home/orangepi/esp32firmware/
+```
+
+**Flashelés** – SSH-n keresztül (egy sorban, távolról):
+```bash
+ssh orangepi@100.68.70.151 'bash /home/orangepi/esp32/flash_esp32.sh'
+```
+
+Vagy közvetlenül:
+```bash
+ssh orangepi@100.68.70.151 '~/.local/bin/esptool --chip esp32c6 --port /dev/ttyACM0 --baud 460800 write_flash --flash_mode dio --flash_freq 80m --flash_size 4MB 0x0 esp32firmware/bootloader.bin 0x8000 esp32firmware/partition-table.bin 0x10000 esp32firmware/esp32c6_zigbee_gateway.bin 0x1f5000 esp32firmware/storage.bin'
+```
+
+A script automatikusan:
+1. Leállítja a serial monitort (screen) – felszabadítja a portot
+2. Felírja a firmware-t (bootloader + partíciós tábla + app + storage)
+3. Újraindítja a serial monitort
+
+**Soros log élőben** (terminálban):
+```bash
+tail -f /tmp/esp32_serial.log
+```
+
+**Interaktív soros konzol** (be is lehet gépelni az ESP32-nek):
+```bash
+screen -r esp32serial
+# Kilépés konzolból (de nem állítja le): Ctrl+A, majd D
+```
+
+**Serial monitor státusz:**
+```bash
+systemctl status esp32-serial
+sudo systemctl restart esp32-serial
+```
+
+---
+
+### ESP32 proxy weboldalak frissítése
+
+A proxy a `CLCode01/web/` fájljainak módosított másolatát szolgálja ki (`scripts/esp32-web/`).
+Ha az ESP32 firmware webes felülete megváltozik, a proxy fájljait szinkronizálni kell.
+
+**Automatikusan** (Time_lapse projekt gyökeréből futtatva):
+```bash
+./scripts/sync_proxy_web.sh
+```
+
+A script elvégzi:
+1. Változatlan fájlok (`ble-service.js`, `style.css`, stb.) egyszerű másolása
+2. `script.js`: másolás + `let bleConnected` / `let zigbeeActive` → `var` csere
+   *(szükséges, hogy a proxy beállíthassa ezeket a változókat)*
+3. `index.html`: másolás + `<script src="proxy-patch.js">` sor visszarakása
+
+Majd deploy az Orange Pi-ra (a script a végén kiírja a pontos parancsokat):
+```bash
+pscp -pw orangepi scripts/esp32-web/*.js   orangepi@100.68.70.151:/home/orangepi/esp32/web/
+pscp -pw orangepi scripts/esp32-web/*.css  orangepi@100.68.70.151:/home/orangepi/esp32/web/
+pscp -pw orangepi scripts/esp32-web/*.html orangepi@100.68.70.151:/home/orangepi/esp32/web/
+pscp -pw orangepi scripts/esp32-web/*.png  orangepi@100.68.70.151:/home/orangepi/esp32/web/
+plink -pw orangepi -batch orangepi@100.68.70.151 "echo orangepi | sudo -S systemctl restart esp32-proxy"
+```
+
+**A `proxy-patch.js` fájlt soha nem kell szinkronizálni** – az csak a proxy saját logikáját tartalmazza, nincs megfelelője a CLCode01 projektben.
+
+---
+
+## Sudo jogosultságok (web UI automatizáláshoz)
+
+A web UI egyes funkciói (USB mountolás/leválasztás, biztonságos újraindítás) jelszó nélküli `sudo`-t igényelnek, mert a Python szerver nem tud interaktívan jelszót bekérni.
+
+A szükséges szabály a repóban megtalálható: [`systemd/timelapse-sudoers`](systemd/timelapse-sudoers)
+
+**Telepítés** (egyszer kell elvégezni, vagy újratelepítéskor):
+```bash
+sudo cp /home/orangepi/timelapse/systemd/timelapse-sudoers /etc/sudoers.d/timelapse
+sudo chmod 440 /etc/sudoers.d/timelapse
+sudo visudo -c -f /etc/sudoers.d/timelapse   # szintaxis ellenőrzés
+```
+
+Engedélyezett parancsok (csak ezekre vonatkozik a NOPASSWD):
+
+| Parancs | Miért kell |
+|---|---|
+| `/usr/bin/mount` | USB pendrive mountolása a web UI-ból |
+| `/usr/bin/umount` | USB leválasztása a web UI-ból |
+| `/usr/bin/mkdir` | Mountpont létrehozása (`/mnt/timelapse`) |
+| `/usr/sbin/reboot` | Biztonságos újraindítás gomb |
+| `/usr/bin/systemctl` | Service kezelés (restart, stop, start) |
+
+> **Megjegyzés:** Ha a `timelapse-http` service újraindítása után a web UI USB mount/unmount gombjai nem működnek, ellenőrizd, hogy a fájl létezik-e: `sudo cat /etc/sudoers.d/timelapse`
+
+---
+
+## WebUI le- és felállítása
+
+A webes felületek leállíthatók anélkül, hogy a timelapse felvétel megszakadna (a cron fut tovább).
+
+**Leállítás** (esp32-proxy, esp32-serial, timelapse-web, timelapse-http):
+```bash
+/home/orangepi/timelapse/scripts/webui_stop.sh
+```
+
+**Indítás:**
+```bash
+/home/orangepi/timelapse/scripts/webui_start.sh
 ```
 
 ---

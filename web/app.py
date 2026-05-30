@@ -4,6 +4,7 @@ Timelapse Web UI – Python stdlib only, no extra dependencies
 Port: 8082
 """
 
+import csv
 import http.server
 import json
 import subprocess
@@ -11,20 +12,140 @@ import os
 import glob
 import re
 import threading
+from datetime import date, timedelta
 from urllib.parse import urlparse, parse_qs
 
-SCRIPT_DIR = "/home/orangepi/timelapse/scripts"
-LOG_DIR    = "/home/orangepi/timelapse/logs"
-FRAME_DIR  = "/tmp/timelapse_frames"
-PORT       = 8082
-HOST       = "0.0.0.0"
+SCRIPT_DIR        = "/home/orangepi/timelapse/scripts"
+LOG_DIR           = "/home/orangepi/timelapse/logs"
+FRAME_DIR         = "/tmp/timelapse_frames"
+SENSOR_RAM_DIR    = "/tmp/sensor_data"
+SERIAL_LOG_FILE   = "/tmp/esp32_serial.log"
+TIMELAPSE_CONFIG  = "/home/orangepi/timelapse/timelapse_config.json"
+USB_MOUNT         = "/mnt/timelapse"
+SD_BASE           = "/home/orangepi/timelapse/videos"
+PORT              = 8082
+HOST              = "0.0.0.0"
+
+# Device path: /dev/sda, /dev/sda1, /dev/sdab2 — only USB block devices
+_DEV_RE = re.compile(r"^/dev/sd[a-z]{1,3}\d?$")
 
 ALLOWED_SCRIPTS = {
     "start_timelapse", "stop_timelapse",
     "preview_start",   "preview_stop",
     "render_now",      "compile_daily",
     "test_capture",    "test_compile",
+    "safe_reboot",     "build_master",
 }
+
+# ── System config helpers ────────────────────────────────────────────────────
+_CONFIG_DEFAULTS = {
+    "email_enabled":       False,
+    "email_to":            "",
+    "smtp_server":         "smtp.gmail.com",
+    "smtp_port":           587,
+    "smtp_user":           "",
+    "smtp_password":       "",
+    "reboot_enabled":      False,
+    "reboot_interval_days": 7,
+    "reboot_time":         "03:00",
+    "last_reboot_date":    "",
+    "master_days_enabled": False,
+    "master_days":         7,
+}
+
+def load_system_config() -> dict:
+    cfg = dict(_CONFIG_DEFAULTS)
+    try:
+        with open(TIMELAPSE_CONFIG) as f:
+            cfg.update(json.load(f))
+    except Exception:
+        pass
+    return cfg
+
+def save_system_config(data: dict):
+    tmp = TIMELAPSE_CONFIG + ".tmp"
+    os.makedirs(os.path.dirname(TIMELAPSE_CONFIG), exist_ok=True)
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, TIMELAPSE_CONFIG)
+
+def _next_reboot_date(cfg: dict) -> str:
+    last = cfg.get("last_reboot_date", "")
+    interval = int(cfg.get("reboot_interval_days", 7))
+    try:
+        base = date.fromisoformat(last) if last else date.today()
+        return (base + timedelta(days=interval)).isoformat()
+    except Exception:
+        return date.today().isoformat()
+
+# ── Storage helpers ──────────────────────────────────────────────────────────
+def get_storage_info() -> dict:
+    """USB mount status + available external block devices."""
+    usb_mounted = os.path.ismount(USB_MOUNT)
+    usb_dev = ""
+    disk_usb = {}
+    if usb_mounted:
+        try:
+            r = subprocess.run(["findmnt", "-n", "-o", "SOURCE", USB_MOUNT],
+                               capture_output=True, text=True, timeout=5)
+            usb_dev = r.stdout.strip()
+        except Exception:
+            pass
+        try:
+            r = subprocess.run(["df", "-h", USB_MOUNT], capture_output=True, text=True, timeout=5)
+            p = r.stdout.strip().split("\n")[1].split()
+            disk_usb = {"total": p[1], "used": p[2], "free": p[3], "pct": p[4]}
+        except Exception:
+            pass
+
+    # List external (non-SD, non-loop) formatted partitions
+    devices = []
+    try:
+        r = subprocess.run(
+            ["lsblk", "-o", "NAME,SIZE,FSTYPE,MOUNTPOINT", "-p", "-n", "-l"],
+            capture_output=True, text=True, timeout=5
+        )
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            name, size, fstype = parts[0], parts[1], parts[2]
+            mountpoint = parts[3] if len(parts) > 3 else ""
+            if any(x in name for x in ("mmcblk", "zram", "mtdblock", "loop")):
+                continue
+            if not fstype:
+                continue
+            devices.append({
+                "dev": name, "size": size, "fstype": fstype,
+                "mountpoint": mountpoint,
+                "is_usb_mount": mountpoint == USB_MOUNT,
+            })
+    except Exception:
+        pass
+
+    current_base = get_video_base()
+    return {
+        "usb_mounted":   usb_mounted,
+        "usb_dev":       usb_dev,
+        "disk_usb":      disk_usb,
+        "current_base":  current_base,
+        "devices":       devices,
+    }
+
+def _update_session_storage(new_base: str):
+    """Update VIDEO_BASE paths in the active session conf."""
+    session_conf = "/tmp/timelapse_session.conf"
+    if not os.path.isfile(session_conf):
+        return
+    archive = new_base + "/archive"
+    master  = new_base + "/master.mp4"
+    for pattern in [
+        (r"VIDEO_BASE=.*",   f'VIDEO_BASE="{new_base}"'),
+        (r"ARCHIVE_DIR=.*",  f'ARCHIVE_DIR="{archive}"'),
+        (r"MASTER_VIDEO=.*", f'MASTER_VIDEO="{master}"'),
+    ]:
+        subprocess.run(["sed", "-i", f"s|{pattern[0]}|{pattern[1]}|", session_conf],
+                       capture_output=True)
 
 # ── Parameter validators ────────────────────────────────────────────────────
 _TIME = re.compile(r"^\d{2}:\d{2}$")
@@ -45,18 +166,39 @@ def build_args(script: str, params: dict) -> list[str]:
     elif script == "render_now":
         if "output" in params and params["output"] and _PATH.match(params["output"]):
             args += ["--output", params["output"]]
+    elif script == "build_master":
+        days = params.get("days", 0)
+        try:
+            days = int(days)
+        except (ValueError, TypeError):
+            days = 0
+        if days > 0:
+            args += ["--days", str(days)]
     return args
 
 # ── Video base helper ────────────────────────────────────────────────────────
 def get_video_base() -> str:
-    r = subprocess.run(
-        ["bash", "-c",
-         "source /home/orangepi/timelapse/scripts/config.sh; "
-         "[ -f /tmp/timelapse_session.conf ] && source /tmp/timelapse_session.conf; "
-         "echo $VIDEO_BASE"],
-        capture_output=True, text=True
-    )
-    return r.stdout.strip() or "/home/orangepi/timelapse/videos"
+    # Check session override first
+    session_conf = "/tmp/timelapse_session.conf"
+    if os.path.isfile(session_conf):
+        with open(session_conf) as f:
+            for line in f:
+                if line.startswith("VIDEO_BASE="):
+                    val = line.strip().split("=", 1)[1].strip('"\'')
+                    if val:
+                        return val
+    # Auto-detect: USB pendrive preferred, SD fallback
+    usb = "/mnt/timelapse"
+    if os.path.ismount(usb) and os.path.isdir(usb):
+        try:
+            testfile = os.path.join(usb, ".write_test")
+            with open(testfile, "w") as f:
+                f.write("x")
+            os.unlink(testfile)
+            return usb
+        except OSError:
+            pass
+    return "/home/orangepi/timelapse/videos"
 
 def get_videos() -> dict:
     video_base   = get_video_base()
@@ -94,6 +236,61 @@ def get_videos() -> dict:
         "renders": list_dir(renders_dir, "*.mp4"),
         "master":  master,
     }
+
+# ── Sensor data helpers ───────────────────────────────────────────────────────
+
+def get_sensor_archive_dir() -> str:
+    return os.path.join(get_video_base(), "sensor_data")
+
+def get_sensor_day_dir(day: str) -> str:
+    """Return path to sensor data for a given YYYY-MM-DD, checking ramdisk then archive."""
+    ram = os.path.join(SENSOR_RAM_DIR, day)
+    if os.path.isdir(ram):
+        return ram
+    return os.path.join(get_sensor_archive_dir(), day)
+
+def list_sensor_dates() -> list:
+    dates = set()
+    for base in [SENSOR_RAM_DIR, get_sensor_archive_dir()]:
+        if os.path.isdir(base):
+            for d in os.listdir(base):
+                if re.match(r"^\d{4}-\d{2}-\d{2}$", d):
+                    dates.add(d)
+    return sorted(dates, reverse=True)
+
+def read_sensor_csv(filepath: str) -> list:
+    rows = []
+    try:
+        with open(filepath, newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                rows.append(row)
+    except Exception:
+        pass
+    return rows
+
+def get_sensor_data(from_date: str, to_date: str) -> dict:
+    """Return sensor readings for a date range. {sensor_name: [rows]}"""
+    result = {}
+    try:
+        d_from = date.fromisoformat(from_date)
+        d_to   = date.fromisoformat(to_date)
+    except ValueError:
+        return result
+    cur = d_from
+    while cur <= d_to:
+        day_str = cur.isoformat()
+        day_dir = get_sensor_day_dir(day_str)
+        if os.path.isdir(day_dir):
+            for csv_file in glob.glob(os.path.join(day_dir, "*.csv")):
+                name = os.path.splitext(os.path.basename(csv_file))[0]
+                rows = read_sensor_csv(csv_file)
+                if name not in result:
+                    result[name] = []
+                result[name].extend(rows)
+        cur += timedelta(days=1)
+    return result
+
 
 # ── Status helper ────────────────────────────────────────────────────────────
 def get_status() -> dict:
@@ -142,6 +339,31 @@ def get_status() -> dict:
         except Exception:
             pass
 
+    # Active session parameters
+    session = {"start": "", "end": "", "interval": "", "storage": ""}
+    session_conf = "/tmp/timelapse_session.conf"
+    if os.path.isfile(session_conf):
+        key_map = {
+            "CAPTURE_START":    "start",
+            "CAPTURE_END":      "end",
+            "CAPTURE_INTERVAL": "interval",
+            "VIDEO_BASE":       "storage",
+        }
+        try:
+            with open(session_conf) as f:
+                for line in f:
+                    for k, v in key_map.items():
+                        if line.startswith(k + "="):
+                            session[v] = line.strip().split("=", 1)[1].strip('"\'')
+        except Exception:
+            pass
+
+    # Reboot schedule info
+    cfg = load_system_config()
+    reboot_scheduled  = bool(cfg.get("reboot_enabled"))
+    next_reboot_date  = _next_reboot_date(cfg) if reboot_scheduled else ""
+    last_reboot_date  = cfg.get("last_reboot_date", "")
+
     return {
         "timelapse_active": tl_active,
         "started_at":       started_at,
@@ -150,6 +372,10 @@ def get_status() -> dict:
         "disk_sd":          disk_sd,
         "usb_ok":           usb_ok,
         "disk_usb":         disk_usb,
+        "session":          session,
+        "reboot_scheduled": reboot_scheduled,
+        "next_reboot_date": next_reboot_date,
+        "last_reboot_date": last_reboot_date,
     }
 
 # ── HTTP handler ─────────────────────────────────────────────────────────────
@@ -174,16 +400,46 @@ class Handler(http.server.BaseHTTPRequestHandler):
             log_type = qs.get("type", ["capture"])[0]
             lines    = min(int(qs.get("lines", ["200"])[0]), 500)
             self._serve_logs(log_type, lines)
+        elif path == "/api/serial-log":
+            qs    = parse_qs(parsed.query)
+            lines = min(int(qs.get("lines", ["200"])[0]), 1000)
+            self._serve_serial_log(lines)
+        elif path == "/api/sensor-dates":
+            self._send_json({"dates": list_sensor_dates()})
+        elif path == "/api/sensor-data":
+            qs      = parse_qs(parsed.query)
+            today   = date.today().isoformat()
+            f_date  = qs.get("from", [today])[0]
+            t_date  = qs.get("to",   [today])[0]
+            self._send_json(get_sensor_data(f_date, t_date))
+        elif path == "/api/system-config":
+            self._serve_system_config()
+        elif path == "/api/storage":
+            self._send_json(get_storage_info())
+        elif path.startswith("/archive/") or path.startswith("/renders/") or path == "/master.mp4":
+            self._serve_video(path)
         else:
             self.send_error(404)
 
     # ── POST ─────────────────────────────────────────────────────────────────
     def do_POST(self):
         parsed = urlparse(self.path)
+        length = int(self.headers.get("Content-Length", 0))
+        body   = json.loads(self.rfile.read(length)) if length else {}
         if parsed.path == "/api/run":
-            length = int(self.headers.get("Content-Length", 0))
-            body   = json.loads(self.rfile.read(length)) if length else {}
             self._run_script(body.get("script", ""), body.get("params", {}))
+        elif parsed.path == "/api/system-config":
+            self._save_system_config(body)
+        elif parsed.path == "/api/safe-reboot":
+            self._trigger_safe_reboot()
+        elif parsed.path == "/api/test-email":
+            self._send_test_email()
+        elif parsed.path == "/api/storage/mount":
+            self._storage_mount(body)
+        elif parsed.path == "/api/storage/umount":
+            self._storage_umount()
+        elif parsed.path == "/api/storage/switch":
+            self._storage_switch(body)
         else:
             self.send_error(404)
 
@@ -201,6 +457,70 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except FileNotFoundError:
             self.send_error(404)
 
+    def _serve_video(self, url_path: str):
+        video_base = get_video_base()
+        # Map URL path to filesystem path safely
+        if url_path == "/master.mp4":
+            filepath = os.path.join(video_base, "master.mp4")
+        else:
+            # /archive/name.mp4 or /renders/name.mp4
+            parts = url_path.lstrip("/").split("/", 1)
+            if len(parts) != 2 or parts[0] not in ("archive", "renders"):
+                self.send_error(404)
+                return
+            subdir, filename = parts
+            # Reject path traversal
+            if ".." in filename or "/" in filename:
+                self.send_error(403)
+                return
+            filepath = os.path.join(video_base, subdir, filename)
+
+        if not os.path.isfile(filepath):
+            self.send_error(404)
+            return
+
+        file_size = os.path.getsize(filepath)
+        range_header = self.headers.get("Range")
+
+        if range_header:
+            # Parse "bytes=start-end"
+            try:
+                byte_range = range_header.replace("bytes=", "").split("-")
+                start = int(byte_range[0]) if byte_range[0] else 0
+                end   = int(byte_range[1]) if byte_range[1] else file_size - 1
+            except Exception:
+                self.send_error(400)
+                return
+            end = min(end, file_size - 1)
+            length = end - start + 1
+            self.send_response(206)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+            self.send_header("Content-Length", length)
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+            with open(filepath, "rb") as f:
+                f.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = f.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        else:
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Length", file_size)
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+            with open(filepath, "rb") as f:
+                while True:
+                    chunk = f.read(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+
     def _send_json(self, data: dict):
         content = json.dumps(data, ensure_ascii=False).encode()
         self.send_response(200)
@@ -208,6 +528,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", len(content))
         self.end_headers()
         self.wfile.write(content)
+
+    def _serve_serial_log(self, lines: int):
+        try:
+            r = subprocess.run(["tail", f"-{lines}", SERIAL_LOG_FILE],
+                               capture_output=True, text=True, errors="replace")
+            available = os.path.isfile(SERIAL_LOG_FILE)
+            self._send_json({"available": available, "lines": r.stdout.splitlines()})
+        except Exception:
+            self._send_json({"available": False, "lines": []})
 
     def _serve_logs(self, log_type: str, lines: int):
         if log_type not in ("capture", "compile"):
@@ -220,6 +549,174 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json({"lines": r.stdout.splitlines()})
         except Exception:
             self._send_json({"lines": []})
+
+    def _serve_system_config(self):
+        cfg = load_system_config()
+        safe = {k: v for k, v in cfg.items() if k != "smtp_password"}
+        safe["smtp_password_set"] = bool(cfg.get("smtp_password", ""))
+        self._send_json(safe)
+
+    def _save_system_config(self, body: dict):
+        _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+        _STR   = re.compile(r"^[\w\-_.@+]+$")
+        cfg = load_system_config()
+        errors = []
+
+        if "email_enabled" in body:
+            cfg["email_enabled"] = bool(body["email_enabled"])
+        if "email_to" in body:
+            v = str(body["email_to"]).strip()
+            if v and not _EMAIL.match(v):
+                errors.append("Érvénytelen email cím")
+            else:
+                cfg["email_to"] = v
+        if "smtp_server" in body:
+            cfg["smtp_server"] = str(body["smtp_server"]).strip()[:128]
+        if "smtp_port" in body:
+            try:
+                p = int(body["smtp_port"])
+                if 1 <= p <= 65535:
+                    cfg["smtp_port"] = p
+            except (ValueError, TypeError):
+                errors.append("Érvénytelen SMTP port")
+        if "smtp_user" in body:
+            cfg["smtp_user"] = str(body["smtp_user"]).strip()[:128]
+        if "smtp_password" in body and body["smtp_password"]:
+            cfg["smtp_password"] = str(body["smtp_password"])
+        if "reboot_enabled" in body:
+            cfg["reboot_enabled"] = bool(body["reboot_enabled"])
+        if "reboot_interval_days" in body:
+            try:
+                d = int(body["reboot_interval_days"])
+                if 1 <= d <= 365:
+                    cfg["reboot_interval_days"] = d
+                else:
+                    errors.append("Intervallum 1-365 nap között legyen")
+            except (ValueError, TypeError):
+                errors.append("Érvénytelen intervallum")
+        if "reboot_time" in body and _TIME.match(str(body["reboot_time"])):
+            cfg["reboot_time"] = str(body["reboot_time"])
+        if "master_days_enabled" in body:
+            cfg["master_days_enabled"] = bool(body["master_days_enabled"])
+        if "master_days" in body:
+            try:
+                d = int(body["master_days"])
+                if 1 <= d <= 365:
+                    cfg["master_days"] = d
+                else:
+                    errors.append("Master napok 1-365 között legyen")
+            except (ValueError, TypeError):
+                errors.append("Érvénytelen master napok érték")
+
+        if errors:
+            self._send_json({"ok": False, "errors": errors})
+            return
+        try:
+            save_system_config(cfg)
+            self._send_json({"ok": True, "next_reboot_date": _next_reboot_date(cfg)})
+        except Exception as e:
+            self._send_json({"ok": False, "errors": [str(e)]})
+
+    def _trigger_safe_reboot(self):
+        script_path = os.path.join(SCRIPT_DIR, "safe_reboot.sh")
+        if not os.path.isfile(script_path):
+            self._send_json({"ok": False, "output": "safe_reboot.sh nem található"})
+            return
+        self._send_json({"ok": True, "output": "Biztonságos újraindítás folyamatban..."})
+        threading.Thread(target=lambda: subprocess.run(
+            ["bash", script_path], capture_output=True
+        ), daemon=True).start()
+
+    def _storage_mount(self, body: dict):
+        dev = str(body.get("device", "")).strip()
+        if not _DEV_RE.match(dev):
+            self._send_json({"ok": False, "error": "Érvénytelen eszköz útvonal"})
+            return
+        if os.path.ismount(USB_MOUNT):
+            self._send_json({"ok": False, "error": f"{USB_MOUNT} már mountolva van. Előbb válaszd le."})
+            return
+        try:
+            fstype = subprocess.run(
+                ["lsblk", "-o", "FSTYPE", "-n", dev],
+                capture_output=True, text=True, timeout=5
+            ).stdout.strip().split("\n")[0].strip()
+        except Exception:
+            fstype = ""
+        subprocess.run(["sudo", "mkdir", "-p", USB_MOUNT], capture_output=True)
+        if fstype in ("ntfs", "ntfs-3g"):
+            cmd = ["sudo", "mount", "-t", "ntfs-3g", "-o", "uid=1000,gid=1000,umask=022", dev, USB_MOUNT]
+        else:
+            cmd = ["sudo", "mount", "-o", "uid=1000,gid=1000", dev, USB_MOUNT]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            os.makedirs(os.path.join(USB_MOUNT, "archive"), exist_ok=True)
+            os.makedirs(os.path.join(USB_MOUNT, "renders"), exist_ok=True)
+            _update_session_storage(USB_MOUNT)
+            try:
+                df = subprocess.run(["df", "-h", USB_MOUNT], capture_output=True, text=True).stdout
+                free = df.strip().split("\n")[1].split()[3]
+            except Exception:
+                free = "?"
+            self._send_json({"ok": True, "message": f"Mountolva: {dev} → {USB_MOUNT} ({fstype or '?'}), szabad: {free}"})
+        else:
+            err = (r.stderr or r.stdout).strip()
+            self._send_json({"ok": False, "error": err or "Ismeretlen hiba"})
+
+    def _storage_umount(self):
+        if not os.path.ismount(USB_MOUNT):
+            self._send_json({"ok": False, "error": "USB nincs mountolva"})
+            return
+        current = get_video_base()
+        if current == USB_MOUNT:
+            os.makedirs(os.path.join(SD_BASE, "archive"), exist_ok=True)
+            _update_session_storage(SD_BASE)
+        subprocess.run(["sync"], capture_output=True, timeout=10)
+        r = subprocess.run(["sudo", "umount", "-l", USB_MOUNT], capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            msg = "USB leválasztva (lazy umount). Néhány másodperc múlva biztonságosan kihúzható."
+            if current == USB_MOUNT:
+                msg += " Tárhely átváltva SD kártyára."
+            self._send_json({"ok": True, "message": msg})
+        else:
+            err = (r.stderr or r.stdout).strip()
+            self._send_json({"ok": False, "error": err or "Leválasztás sikertelen"})
+
+    def _storage_switch(self, body: dict):
+        target = str(body.get("target", "")).strip()
+        if target == "usb":
+            if not os.path.ismount(USB_MOUNT):
+                self._send_json({"ok": False, "error": "USB nincs mountolva"})
+                return
+            new_base = USB_MOUNT
+        elif target == "sd":
+            new_base = SD_BASE
+        else:
+            self._send_json({"ok": False, "error": "Érvénytelen cél (usb vagy sd)"})
+            return
+        os.makedirs(os.path.join(new_base, "archive"), exist_ok=True)
+        _update_session_storage(new_base)
+        label = "USB pendrive" if target == "usb" else "SD kártya"
+        self._send_json({"ok": True, "message": f"Session tárhely átváltva: {label} ({new_base})"})
+
+    def _send_test_email(self):
+        script_path = os.path.join(SCRIPT_DIR, "send_alert.py")
+        if not os.path.isfile(script_path):
+            self._send_json({"ok": False, "output": "send_alert.py nem található"})
+            return
+        try:
+            result = subprocess.run(
+                ["python3", script_path, "Teszt értesítés",
+                 f"Ez egy teszt email a timelapse rendszertől ({os.uname().nodename})."],
+                capture_output=True, text=True, timeout=60
+            )
+            self._send_json({
+                "ok":     result.returncode == 0,
+                "output": (result.stdout + result.stderr).strip() or "Elküldve",
+            })
+        except subprocess.TimeoutExpired:
+            self._send_json({"ok": False, "output": "Timeout (60 mp)"})
+        except Exception as e:
+            self._send_json({"ok": False, "output": str(e)})
 
     def _run_script(self, script: str, params: dict):
         if script not in ALLOWED_SCRIPTS:

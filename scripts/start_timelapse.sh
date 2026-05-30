@@ -71,6 +71,24 @@ EOF
 # --- Flag fájl ---
 date '+%Y-%m-%d %H:%M:%S' > /tmp/timelapse_active
 
+# --- Perzisztens session mentés (áramszünet utáni visszaállításhoz) ---
+python3 - <<PYEOF
+import json, os
+data = {
+    "active": True,
+    "session_start":    "${SESSION_START}",
+    "session_end":      "${SESSION_END}",
+    "session_interval": "${SESSION_INTERVAL}",
+    "session_storage":  "${SESSION_STORAGE}",
+    "saved_at":         "$(date '+%Y-%m-%d %H:%M:%S')"
+}
+path = "/home/orangepi/timelapse/last_session.json"
+tmp  = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(data, f, indent=2)
+os.replace(tmp, path)
+PYEOF
+
 echo "Timelapse elindítva."
 echo "  Időablak: ${SESSION_START} – ${SESSION_END}"
 echo "  Intervallum: ${SESSION_INTERVAL} másodperc"

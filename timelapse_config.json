@@ -1,0 +1,12 @@
+{
+  "email_enabled": false,
+  "email_to": "",
+  "smtp_server": "smtp.gmail.com",
+  "smtp_port": 587,
+  "smtp_user": "",
+  "smtp_password": "",
+  "reboot_enabled": false,
+  "reboot_interval_days": 7,
+  "reboot_time": "03:00",
+  "last_reboot_date": ""
+}
