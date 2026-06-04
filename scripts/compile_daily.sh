@@ -27,12 +27,39 @@ log "=== Compiling daily video for ${YESTERDAY} ==="
 # ── USB állapot ellenőrzés ────────────────────────────────────────────────────
 USB_MOUNT="/mnt/timelapse"
 USB_OK=false
+USB_DEV=""
 if mountpoint -q "$USB_MOUNT" && [ -w "$USB_MOUNT" ]; then
     USB_OK=true
-    log "USB rendben: $USB_MOUNT"
+    USB_DEV=$(findmnt -n -o SOURCE "$USB_MOUNT" 2>/dev/null)
+    log "USB rendben: $USB_MOUNT (eszköz: ${USB_DEV:-ismeretlen})"
 else
     log "WARNING: USB nem elérhető ($USB_MOUNT), SD fallbackre vált"
 fi
+
+# Pendrive remount kísérlet (ha USB_DEV ismert és az írás sikertelen)
+remount_usb() {
+    if [ -z "$USB_DEV" ]; then
+        log "Remount kihagyva: eszközazonosító ismeretlen"
+        return 1
+    fi
+    log "Remount kísérlet: umount $USB_MOUNT → mount $USB_DEV $USB_MOUNT"
+    sync
+    sudo umount -l "$USB_MOUNT" 2>/dev/null
+    sleep 2
+    FS=$(lsblk -o FSTYPE -n "$USB_DEV" 2>/dev/null | head -1)
+    if [ "$FS" = "ntfs" ] || [ "$FS" = "ntfs-3g" ]; then
+        sudo mount -t ntfs-3g -o uid=1000,gid=1000,umask=022 "$USB_DEV" "$USB_MOUNT" 2>>/tmp/remount_err
+    else
+        sudo mount -o uid=1000,gid=1000 "$USB_DEV" "$USB_MOUNT" 2>>/tmp/remount_err
+    fi
+    if mountpoint -q "$USB_MOUNT" && [ -w "$USB_MOUNT" ]; then
+        log "Remount sikeres: $USB_MOUNT"
+        return 0
+    else
+        log "Remount sikertelen: $(cat /tmp/remount_err 2>/dev/null)"
+        return 1
+    fi
+}
 
 # ── Frame lista összeállítása ─────────────────────────────────────────────────
 FRAME_LIST=$(mktemp)
@@ -102,9 +129,27 @@ if [ "$USB_OK" = true ]; then
         log "USB mentés OK: $DEST_DAILY ($(du -sh "$DEST_DAILY" | cut -f1))"
         rm -f "$TMP_DAILY"
     else
-        log "ERROR: USB fájl mérete eltér (forrás: ${TMP_SIZE}, cél: ${DEST_SIZE}), SD fallback"
+        log "ERROR: USB fájl mérete eltér (forrás: ${TMP_SIZE}, cél: ${DEST_SIZE}), remount és újrapróbálkozás"
         rm -f "$DEST_DAILY"
-        USB_OK=false
+
+        # Remount + újrapróbálkozás
+        if remount_usb; then
+            mkdir -p "$USB_ARCHIVE"
+            log "Újrapróbálkozás USB írással remount után"
+            cp "$TMP_DAILY" "$DEST_DAILY" 2>> "$LOG"
+            DEST_SIZE2=$(stat -c%s "$DEST_DAILY" 2>/dev/null || echo 0)
+            if [ "$DEST_SIZE2" -eq "$TMP_SIZE" ] && [ "$DEST_SIZE2" -gt 0 ]; then
+                log "USB mentés OK (remount után): $DEST_DAILY"
+                rm -f "$TMP_DAILY"
+            else
+                log "ERROR: USB mentés remount után is sikertelen (méret: ${DEST_SIZE2}), SD fallback"
+                rm -f "$DEST_DAILY"
+                USB_OK=false
+            fi
+        else
+            log "Remount sikertelen, SD fallback"
+            USB_OK=false
+        fi
     fi
 fi
 
