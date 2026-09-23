@@ -134,6 +134,14 @@
                 <!-- GPIO Pin Selection (shown only when toggle is ON) -->
                 <div id="xkc-gpio-settings" class="hidden">
                     <div class="form-group">
+                        <label for="xkc-sense-mode">Erzekelesi mod:</label>
+                        <select id="xkc-sense-mode" class="form-select" onchange="onXkcSenseModeChange()">
+                            <option value="0">Digitalis (GPIO)</option>
+                            <option value="1">Analog (ADC + kuszobertek)</option>
+                        </select>
+                        <small class="hint">Analog mod: atmeneti megoldas szintilleszto nelkul, ha a szenzor "magas" jele nem er el megbizhato digitalis logikai szintet. Digitalis modban a bemenet normal GPIO-kent (belso lehuzo ellenallassal) mukodik.</small>
+                    </div>
+                    <div class="form-group">
                         <label for="xkc-gpio-lower">Also szenzor GPIO:</label>
                         <select id="xkc-gpio-lower" class="form-select"></select>
                     </div>
@@ -141,10 +149,25 @@
                         <label for="xkc-gpio-upper">Felso szenzor GPIO:</label>
                         <select id="xkc-gpio-upper" class="form-select"></select>
                     </div>
+                    <div id="xkc-threshold-settings" class="form-group hidden">
+                        <label for="xkc-threshold-mv">Kuszobertek (mV):</label>
+                        <input type="number" id="xkc-threshold-mv" class="form-select" min="0" max="3900" step="10" value="1500">
+                        <small class="hint">Analog modban ez felett szamit a szint "magasnak".</small>
+                    </div>
                     <div class="warning-box">
                         &#9888; A GPIO labak modositasa hardware csatlakozast igenyel.
                         Ellenorizze, hogy a szenzorok a megfelelo labakra vannak kotve!
                     </div>
+                </div>
+
+                <!-- Serial Interface -->
+                <div class="form-group" style="margin-top:14px">
+                    <label for="serial-interface">Soros interfesz:</label>
+                    <select id="serial-interface" class="form-select">
+                        <option value="0">USB Serial JTAG (USB-C)</option>
+                        <option value="1">UART0 (GPIO21 TX / GPIO20 RX) &mdash; WiFi Gateway</option>
+                    </select>
+                    <small class="hint">&#9888; Valtozas csak ujrainditaskor lep eletbe.</small>
                 </div>
 
                 <button onclick="saveGlobalConfig()" class="btn btn-primary" style="margin-top:10px">Beallitasok mentese</button>

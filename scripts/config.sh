@@ -20,7 +20,33 @@ FFMPEG_PRESET="medium"
 RESOLUTION="1920x1080"
 
 # Kamera eszköz
-CAMERA_DEVICE="/dev/video1"
+# A /dev/videoX sorszámozás kernel/driver frissítés után eltolódhat (pl. a C920
+# UVC metaadat node-ja beékelődik a tényleges capture node elé), ezért a fix
+# útvonal helyett detektáljuk: a preferált node-tól indulva megkeressük az
+# elsőt, aminek ténylegesen van "Video Capture" képessége (nem csak metaadat
+# vagy memory-to-memory, mint a cedrus dekóder) és a névben egyezik a kamerával.
+CAMERA_DEVICE_PREFERRED="/dev/video0"
+CAMERA_NAME_MATCH="C920"
+
+detect_camera_device() {
+    local preferred="$1" name_match="$2" dev caps
+
+    command -v v4l2-ctl >/dev/null 2>&1 || { echo "$preferred"; return; }
+
+    for dev in "$preferred" /dev/video*; do
+        [ -c "$dev" ] || continue
+        caps=$(v4l2-ctl -d "$dev" --info 2>/dev/null)
+        echo "$caps" | grep -q "$name_match" || continue
+        if echo "$caps" | awk '/^\tDevice Caps/{f=1;next} /^[A-Za-z].*:/{f=0} f' | grep -q "Video Capture"; then
+            echo "$dev"
+            return
+        fi
+    done
+
+    echo "$preferred"
+}
+
+CAMERA_DEVICE="$(detect_camera_device "$CAMERA_DEVICE_PREFERRED" "$CAMERA_NAME_MATCH")"
 CAPTURE_INTERVAL=60  # képek közötti szünet másodpercben
 CAMERA_SKIP=5        # eldobott képkocka induláskor (fehéregyensúly stabilizálás)
 JPEG_QUALITY=85

@@ -285,6 +285,121 @@
         main.appendChild(section);
     }
 
+    // ── 5. Config export / import panel ───────────────────────────────────────
+    //
+    // Talks to two proxy-only endpoints (not part of the ESP32's own HTTP API):
+    // GET/POST /api/proxy/rules.txt and /api/proxy/config.json. The proxy
+    // (esp32_proxy.py) translates those into the device's
+    // export_config/import_config/upload_* serial (or BLE) commands.
+    // See CLCode01/tools/usb_proxy/proxy-tools.js for the reference version
+    // this was ported from.
+
+    function _downloadBlob(filename, mime, text) {
+        const blob = new Blob([text], { type: mime });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    }
+
+    function _setConfigToolsStatus(msg, isError) {
+        const el = document.getElementById('proxy-configtools-status');
+        if (!el) return;
+        el.textContent = msg;
+        el.style.color = isError ? '#f38ba8' : '#6c7086';
+    }
+
+    async function exportConfigFile(endpoint, filename, mime) {
+        _setConfigToolsStatus('Exportálás…');
+        try {
+            const r = await fetch(endpoint);
+            if (!r.ok) {
+                const d = await r.json().catch(() => ({}));
+                throw new Error(d.error || ('HTTP ' + r.status));
+            }
+            const text = await r.text();
+            _downloadBlob(filename, mime, text);
+            _setConfigToolsStatus('Mentve: ' + filename);
+        } catch (e) {
+            _setConfigToolsStatus('Exportálás sikertelen: ' + e.message, true);
+        }
+    }
+
+    function _pickConfigFileThen(onText) {
+        const input = document.getElementById('proxy-configtools-file');
+        input.value = '';
+        input.onchange = () => {
+            const file = input.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = () => onText(reader.result);
+            reader.onerror = () => _setConfigToolsStatus('Fájl olvasási hiba', true);
+            reader.readAsText(file);
+        };
+        input.click();
+    }
+
+    async function importConfigFile(endpoint, contentType, text, label) {
+        _setConfigToolsStatus(label + ' importálása (nagyobb fájlnál eltarthat pár másodpercig)…');
+        try {
+            const r = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': contentType },
+                body: text
+            });
+            const d = await r.json();
+            if (d.ok || d.status === 'ok') {
+                let extra = '';
+                if (d.devices_imported !== undefined) extra += ' Eszközök: ' + d.devices_imported;
+                if (d.rule_count !== undefined) extra += ' Szabályok: ' + d.rule_count;
+                _setConfigToolsStatus(label + ' importálva.' + extra);
+            } else {
+                _setConfigToolsStatus('Importálás sikertelen: ' + (d.message || d.error || 'ismeretlen hiba'), true);
+            }
+        } catch (e) {
+            _setConfigToolsStatus('Importálás sikertelen: ' + e.message, true);
+        }
+    }
+
+    function injectConfigToolsSection() {
+        const main = document.querySelector('main') || document.body;
+        if (document.getElementById('proxy-configtools-section')) return;
+        const section = document.createElement('div');
+        section.id = 'proxy-configtools-section';
+        section.style.cssText = 'margin-top:20px;';
+        section.innerHTML = `
+            <div style="background:#1e1e2e;border:1px solid #313244;border-radius:10px;padding:16px;">
+              <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;
+                          color:#6c7086;margin-bottom:12px;">Config export / import (USB proxy)</div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button id="pt-export-rules" class="btn btn-secondary btn-small">Szabályok exportálása</button>
+                <button id="pt-import-rules" class="btn btn-secondary btn-small">Szabályok importálása…</button>
+                <button id="pt-export-config" class="btn btn-secondary btn-small">Config exportálása</button>
+                <button id="pt-import-config" class="btn btn-secondary btn-small">Config importálása…</button>
+              </div>
+              <input type="file" id="proxy-configtools-file" style="display:none">
+              <div id="proxy-configtools-status" style="margin-top:8px;font-size:12px;color:#6c7086;white-space:pre-wrap;word-break:break-word;"></div>
+            </div>`;
+        main.appendChild(section);
+
+        document.getElementById('pt-export-rules').addEventListener('click', () => {
+            exportConfigFile('/api/proxy/rules.txt', 'rules.txt', 'text/plain');
+        });
+        document.getElementById('pt-export-config').addEventListener('click', () => {
+            exportConfigFile('/api/proxy/config.json', 'config.json', 'application/json');
+        });
+        document.getElementById('pt-import-rules').addEventListener('click', () => {
+            _pickConfigFileThen((text) => importConfigFile('/api/proxy/rules.txt', 'text/plain', text, 'Szabályok'));
+        });
+        document.getElementById('pt-import-config').addEventListener('click', () => {
+            _pickConfigFileThen((text) => importConfigFile('/api/proxy/config.json', 'application/json', text, 'Config'));
+        });
+    }
+
     // ── 6. Boot ───────────────────────────────────────────────────────────────
 
     // Hook into loadDevices to capture device list
@@ -305,6 +420,7 @@
     document.addEventListener('DOMContentLoaded', function () {
         injectBleButtons();
         injectSensorSection();
+        injectConfigToolsSection();
         updateProxyStatus();
         setInterval(updateProxyStatus, 5000);
         setInterval(loadSensorConfig, 30000);

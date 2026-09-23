@@ -143,23 +143,39 @@ def serial_call(cmd: str, params: dict, timeout: float = SERIAL_CMD_TIMEOUT) -> 
         os.unlink(tmp)
         print(f"[SERIAL] → {payload[:80]}")
 
-        # Wait for >>> response to appear in the log file
+        # Wait for >>> response to appear in the log file.
+        # screen only flushes its logfile periodically (see esp32-serial.service:
+        # "logfile flush 1") and its internal stdio buffer can also spill to disk
+        # mid-line for a long response, so at any given poll the last "line" in
+        # the file may just be a response that is still being written. Only the
+        # portion up to the last completed newline is safe to parse -- treating
+        # a not-yet-newline-terminated tail as a finished line is what used to
+        # produce spurious "JSON parse error ... column 4094" failures on long
+        # responses (e.g. get_devices with many devices).
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
                 with open(SERIAL_LOG_FILE, "rb") as f:
                     f.seek(log_pos)
-                    new_data = _ANSI.sub(b"", f.read()).decode("utf-8", errors="replace")
-                for line in new_data.splitlines():
-                    line = line.strip()
+                    raw_bytes = f.read()
+                clean = _ANSI.sub(b"", raw_bytes)
+                if clean.endswith(b"\n"):
+                    complete = clean
+                elif b"\n" in clean:
+                    complete = clean.rsplit(b"\n", 1)[0]
+                else:
+                    complete = b""  # nothing fully written yet
+                for line_b in complete.split(b"\n"):
+                    line = line_b.decode("utf-8", errors="replace").strip()
                     if line.startswith(">>>") and "{" in line:
                         raw = line[line.index("{"):]
-                        print(f"[SERIAL] ← {line[:120]}")
                         try:
-                            return json.loads(raw)
+                            result = json.loads(raw)
                         except json.JSONDecodeError as je:
-                            print(f"[SERIAL] JSON parse error: {je} | raw={raw[:200]}")
-                            raise
+                            print(f"[SERIAL] JSON parse error on complete line: {je} | raw={raw[:200]}")
+                            continue
+                        print(f"[SERIAL] ← {line[:120]}")
+                        return result
             except Exception:
                 pass
             time.sleep(0.1)
@@ -167,11 +183,45 @@ def serial_call(cmd: str, params: dict, timeout: float = SERIAL_CMD_TIMEOUT) -> 
     raise TimeoutError(f"No serial response for cmd={cmd} within {timeout}s")
 
 
-def device_call(cmd: str, params: dict) -> dict:
+def device_call(cmd: str, params: dict, timeout: float = SERIAL_CMD_TIMEOUT) -> dict:
     """Send command via serial if available, fall back to BLE."""
     if _serial_available and _screen_running():
-        return serial_call(cmd, params)
-    return ble_call(cmd, params)
+        return serial_call(cmd, params, timeout=timeout)
+    return ble_call(cmd, params, timeout=timeout)
+
+
+# =============================================================================
+# Chunked config/rules upload (export/import panel)
+#
+# Mirrors CLCode01/tools/usb_proxy/proxy.py's SerialLink.upload(): a large
+# "rules" or "config" payload is sent as upload_begin/upload_chunk*/upload_commit
+# instead of one oversized command, so it never has to fit in one serial line.
+# 700 chars/chunk stays well under the firmware's serial line buffer.
+# =============================================================================
+
+UPLOAD_CHUNK_CHARS = 700
+
+
+def _upload_commit_timeout(size_bytes: int) -> float:
+    """A config import re-creates every device in NVS; give it more time
+    the bigger the payload is instead of a single fixed timeout."""
+    return max(SERIAL_CMD_TIMEOUT, 5.0 + size_bytes / 2000.0)
+
+
+def device_upload(target: str, text: str) -> dict:
+    size = len(text.encode("utf-8"))
+    resp = device_call("upload_begin", {"target": target, "size": size})
+    if resp.get("status") != "ok":
+        return resp
+
+    for i in range(0, len(text), UPLOAD_CHUNK_CHARS):
+        piece = text[i:i + UPLOAD_CHUNK_CHARS]
+        resp = device_call("upload_chunk", {"data": piece})
+        if resp.get("status") != "ok":
+            device_call("upload_abort", {})
+            return resp
+
+    return device_call("upload_commit", {}, timeout=_upload_commit_timeout(size))
 
 
 # =============================================================================
@@ -531,11 +581,11 @@ def _sensor_scheduler():
 # Sync BLE wrapper (called from HTTP handler threads)
 # =============================================================================
 
-def ble_call(cmd: str, params: dict) -> dict:
+def ble_call(cmd: str, params: dict, timeout: float = 20.0) -> dict:
     async def _locked():
         async with _lock:
             return await _send(cmd, params)
-    return asyncio.run_coroutine_threadsafe(_locked(), _loop).result(timeout=20)
+    return asyncio.run_coroutine_threadsafe(_locked(), _loop).result(timeout=timeout)
 
 
 # =============================================================================
@@ -689,6 +739,72 @@ class Handler(BaseHTTPRequestHandler):
             print(f"[HTTP] ERROR cmd={cmd}: {exc}")
             self._send_json(500, {"error": str(exc)})
 
+    # ── config export/import (USB proxy-only feature, downloads/uploads files) ──
+
+    def _device_available(self) -> bool:
+        return (_serial_available and _screen_running()) or connected
+
+    def _download(self, data: bytes, content_type: str, filename: str):
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _export_rules(self):
+        if not self._device_available():
+            self._send_json(503, {"error": "Not connected"})
+            return
+        try:
+            resp = device_call("get_rules", {})
+        except (ConnectionError, TimeoutError) as exc:
+            self._send_json(504, {"error": str(exc)})
+            return
+        text = resp.get("text", "") if resp.get("status") == "ok" else ""
+        self._download(text.encode("utf-8"), "text/plain; charset=utf-8", "rules.txt")
+
+    def _import_rules(self):
+        if not self._device_available():
+            self._send_json(503, {"error": "Not connected"})
+            return
+        text = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8", errors="replace")
+        try:
+            resp = device_upload("rules", text)
+        except (ConnectionError, TimeoutError) as exc:
+            self._send_json(504, {"error": str(exc)})
+            return
+        if resp.get("status") == "ok" and "ok" not in resp:
+            resp["ok"] = True
+        self._send_json(200, resp)
+
+    def _export_config(self):
+        if not self._device_available():
+            self._send_json(503, {"error": "Not connected"})
+            return
+        try:
+            resp = device_call("export_config", {})
+        except (ConnectionError, TimeoutError) as exc:
+            self._send_json(504, {"error": str(exc)})
+            return
+        data = json.dumps(resp, indent=2, ensure_ascii=False).encode("utf-8")
+        self._download(data, "application/json; charset=utf-8", "config.json")
+
+    def _import_config(self):
+        if not self._device_available():
+            self._send_json(503, {"error": "Not connected"})
+            return
+        text = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8", errors="replace")
+        try:
+            resp = device_upload("config", text)
+        except (ConnectionError, TimeoutError) as exc:
+            self._send_json(504, {"error": str(exc)})
+            return
+        if resp.get("status") == "ok" and "ok" not in resp:
+            resp["ok"] = True
+        self._send_json(200, resp)
+
     # ── static files ──────────────────────────────────────────────────────────
 
     def _serve_static(self):
@@ -739,6 +855,10 @@ class Handler(BaseHTTPRequestHandler):
             with _sensor_cfg_lock:
                 status = {ieee: _get_runtime(ieee) for ieee in _sensor_config}
             self._send_json(200, status)
+        elif self.path == "/api/proxy/rules.txt":
+            self._export_rules()
+        elif self.path == "/api/proxy/config.json":
+            self._export_config()
         elif self.path.startswith("/api/serial-logs"):
             qs = parse_qs(urlparse(self.path).query)
             since = int(qs.get("since", [0])[0])
@@ -771,6 +891,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, result)
             except Exception as exc:
                 self._send_json(500, {"ok": False, "msg": str(exc)})
+        elif self.path == "/api/proxy/rules.txt":
+            self._import_rules()
+        elif self.path == "/api/proxy/config.json":
+            self._import_config()
         elif self.path == "/api/sensor-config":
             body = self._read_body()
             with _sensor_cfg_lock:
