@@ -400,6 +400,37 @@ button:disabled { opacity: .35; cursor: not-allowed; }
         <div id="st-result" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
       </div>
     </div>
+
+    <!-- WiFi gateway egységek (összecsukható) -->
+    <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
+      <button onclick="toggleUnitsPanel()" style="background:none;border:none;color:var(--muted);
+              font-size:12px;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px">
+        <span id="units-arrow" style="font-size:10px">▶</span>
+        🔌 Egységek (WiFi gateway-ek)
+      </button>
+      <div id="units-panel" style="display:none;margin-top:14px">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:6px">Konfigurált egységek:</div>
+        <div id="units-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px">
+          <span style="font-size:12px;color:var(--muted);font-style:italic">Betöltés...</span>
+        </div>
+
+        <div style="font-size:12px;color:var(--muted);margin-bottom:6px">Új egység hozzáadása:</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+          <input type="text" id="unit-name" placeholder="Név (pl. WiFiGateway)"
+            style="flex:1;min-width:140px;padding:5px 8px;font-size:12px;border-radius:4px;
+                   border:1px solid var(--border);background:var(--bg);color:var(--text)">
+          <input type="text" id="unit-ip" placeholder="Lokális IP cím (pl. 192.168.1.108)"
+            style="flex:1;min-width:180px;padding:5px 8px;font-size:12px;border-radius:4px;
+                   border:1px solid var(--border);background:var(--bg);color:var(--text)">
+        </div>
+        <div class="btn-grid">
+          <button class="btn-gray" onclick="scanUnits()">🔍 Hálózat pásztázása</button>
+          <button class="btn-blue" onclick="addUnit()">➕ Egység hozzáadása</button>
+        </div>
+        <div id="units-scan-result" style="margin-top:8px;display:flex;flex-direction:column;gap:4px"></div>
+        <div id="units-result" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
+      </div>
+    </div>
   </div>
 
 </main>
@@ -948,6 +979,112 @@ async function _storageAction(url, body) {
     el.style.color = 'var(--red)';
     el.textContent = 'Hálózati hiba';
     return { ok: false };
+  }
+}
+
+function toggleUnitsPanel() {
+  const panel = document.getElementById('units-panel');
+  const arrow = document.getElementById('units-arrow');
+  if (panel.style.display === 'none') {
+    panel.style.display = 'block';
+    arrow.textContent = '▼';
+    loadUnits();
+  } else {
+    panel.style.display = 'none';
+    arrow.textContent = '▶';
+  }
+}
+
+async function loadUnits() {
+  const listEl = document.getElementById('units-list');
+  try {
+    const s = await api('/api/units');
+    if (!s.units || s.units.length === 0) {
+      listEl.innerHTML = '<span style="font-size:12px;color:var(--muted);font-style:italic">Nincs konfigurált egység.</span>';
+      return;
+    }
+    listEl.innerHTML = s.units.map(u => {
+      const resolved = !!u.ip;
+      const host = window.location.hostname;
+      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;
+              background:var(--bg);border:1px solid var(--border);border-radius:6px;">
+        <span style="width:8px;height:8px;border-radius:50%;flex-shrink:0;
+              background:${resolved ? 'var(--green)' : '#555'}"
+              title="${resolved ? 'Feloldva' : 'IP még nincs feloldva'}"></span>
+        <span style="font-family:monospace;font-size:12px;flex:1;color:var(--text)">
+          ${escHtml(u.name)} &nbsp; <span style="color:var(--muted)">${escHtml(u.mac)}</span>
+          &nbsp; :${u.port} ${resolved ? `&nbsp; → ${escHtml(u.ip)}` : ''}
+        </span>
+        ${resolved ? `<a class="btn-blue" style="padding:4px 10px;font-size:11px;text-decoration:none"
+          href="http://${host}:${u.port}/" target="_blank">Megnyitás</a>` : ''}
+        <button class="btn-red" style="padding:4px 10px;font-size:11px"
+          onclick="removeUnit('${escHtml(u.name)}')">Törlés</button>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    listEl.innerHTML = '<span style="color:var(--red);font-size:12px">Hiba a lista betöltésekor.</span>';
+  }
+}
+
+async function scanUnits() {
+  const resEl = document.getElementById('units-scan-result');
+  resEl.innerHTML = '<span style="font-size:12px;color:var(--muted);font-style:italic">Pásztázás... (néhány másodperc)</span>';
+  try {
+    const s = await api('/api/units/scan');
+    if (!s.devices || s.devices.length === 0) {
+      resEl.innerHTML = '<span style="font-size:12px;color:var(--muted);font-style:italic">Nincs látható eszköz.</span>';
+      return;
+    }
+    resEl.innerHTML = s.devices.map(d => `<button class="btn-gray" style="text-align:left;
+        padding:4px 8px;font-size:11px;font-family:monospace"
+        onclick="document.getElementById('unit-ip').value='${escHtml(d.ip)}'">
+        ${escHtml(d.ip)} &nbsp; <span style="color:var(--muted)">${escHtml(d.mac)}</span>
+      </button>`).join('');
+  } catch(e) {
+    resEl.innerHTML = '<span style="color:var(--red);font-size:12px">Hálózati hiba</span>';
+  }
+}
+
+async function addUnit() {
+  const nameEl = document.getElementById('unit-name');
+  const ipEl   = document.getElementById('unit-ip');
+  const resEl  = document.getElementById('units-result');
+  const name = nameEl.value.trim();
+  const ip   = ipEl.value.trim();
+  if (!name || !ip) {
+    resEl.style.color = 'var(--red)';
+    resEl.textContent = 'Add meg a nevet és az IP-címet.';
+    return;
+  }
+  resEl.style.color = 'var(--muted)';
+  resEl.textContent = 'Hozzáadás...';
+  try {
+    const res = await api('/api/units', 'POST', { name, ip });
+    resEl.style.color = res.ok ? 'var(--green)' : 'var(--red)';
+    resEl.textContent = res.ok ? `Hozzáadva, port: ${res.port}` : (res.error || 'Hiba');
+    if (res.ok) {
+      nameEl.value = '';
+      ipEl.value = '';
+      document.getElementById('units-scan-result').innerHTML = '';
+      loadUnits();
+    }
+  } catch(e) {
+    resEl.style.color = 'var(--red)';
+    resEl.textContent = 'Hálózati hiba';
+  }
+}
+
+async function removeUnit(name) {
+  if (!confirm(`Törlöd a(z) "${name}" egységet?`)) return;
+  const resEl = document.getElementById('units-result');
+  try {
+    const res = await api('/api/units/remove', 'POST', { name });
+    resEl.style.color = res.ok ? 'var(--green)' : 'var(--red)';
+    resEl.textContent = res.ok ? 'Törölve' : (res.error || 'Hiba');
+    if (res.ok) loadUnits();
+  } catch(e) {
+    resEl.style.color = 'var(--red)';
+    resEl.textContent = 'Hálózati hiba';
   }
 }
 

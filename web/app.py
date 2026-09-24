@@ -6,6 +6,7 @@ Port: 8082
 
 import csv
 import http.server
+import ipaddress
 import json
 import subprocess
 import os
@@ -51,7 +52,115 @@ _CONFIG_DEFAULTS = {
     "last_reboot_date":    "",
     "master_days_enabled": False,
     "master_days":         7,
+    "units":               [],
 }
+
+# ── WiFi gateway units (transparent forward, see wifigw_forward.py) ────────────
+UNIT_STATUS_FILE  = "/tmp/wifigw_status.json"
+UNIT_PORT_START   = 8084
+_RESERVED_PORTS   = {8080, 8081, 8082, 8083}
+_IP_RE            = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
+_UNIT_NAME_RE     = re.compile(r"^[\w .\-]{1,40}$")
+
+def normalize_mac(mac: str) -> str:
+    return mac.strip().lower().replace("-", ":")
+
+def load_units() -> list:
+    return load_system_config().get("units", [])
+
+def save_units(units: list):
+    cfg = load_system_config()
+    cfg["units"] = units
+    save_system_config(cfg)
+
+def next_free_port(units: list) -> int:
+    used = _RESERVED_PORTS | {u["port"] for u in units}
+    port = UNIT_PORT_START
+    while port in used:
+        port += 1
+    return port
+
+def read_unit_status() -> dict:
+    try:
+        with open(UNIT_STATUS_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _read_arp_table() -> list:
+    """Raw /proc/net/arp entries with a resolved (non-zero) MAC."""
+    entries = []
+    try:
+        with open("/proc/net/arp") as f:
+            lines = f.readlines()[1:]
+        for line in lines:
+            parts = line.split()
+            if len(parts) >= 4 and parts[0] != "0.0.0.0" and parts[3] != "00:00:00:00:00:00":
+                entries.append({"ip": parts[0], "mac": parts[3].lower()})
+    except Exception:
+        pass
+    return entries
+
+def local_ipv4_network():
+    """(own_ip, ipaddress.IPv4Network) for the Pi's primary non-loopback interface."""
+    try:
+        r = subprocess.run(["ip", "-o", "-4", "addr", "show"],
+                            capture_output=True, text=True, timeout=5)
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 2 or parts[1] == "lo":
+                continue
+            for i, p in enumerate(parts):
+                if p == "inet" and i + 1 < len(parts):
+                    iface = ipaddress.ip_interface(parts[i + 1])
+                    return str(iface.ip), iface.network
+    except Exception:
+        pass
+    return None, None
+
+def ping_once(ip: str, timeout: float = 1.5) -> bool:
+    try:
+        r = subprocess.run(["ping", "-c", "1", "-W", str(int(timeout) or 1), ip],
+                            capture_output=True, timeout=timeout + 1)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+def mac_for_ip(ip: str):
+    for e in _read_arp_table():
+        if e["ip"] == ip:
+            return e["mac"]
+    return None
+
+def resolve_mac_for_ip(ip: str):
+    """Actively ping the IP to populate the ARP cache, then read its MAC."""
+    ping_once(ip, timeout=2)
+    return mac_for_ip(ip)
+
+def scan_network() -> list:
+    """Active discovery: ping-sweep the local /24 so devices that the Pi hasn't
+    talked to yet also show up (a passive ARP-table read alone only finds
+    devices already cached from recent traffic)."""
+    own_ip, network = local_ipv4_network()
+    if network is not None and network.num_addresses <= 1024:
+        procs = []
+        for host in network.hosts():
+            ip = str(host)
+            if ip == own_ip:
+                continue
+            procs.append(subprocess.Popen(
+                ["ping", "-c", "1", "-W", "1", ip],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        for p in procs:
+            try:
+                p.wait(timeout=3)
+            except Exception:
+                p.kill()
+    return _read_arp_table()
+
+def restart_unit_forward():
+    subprocess.run(["sudo", "systemctl", "restart", "wifigw-forward"],
+                    capture_output=True, timeout=15)
 
 def load_system_config() -> dict:
     cfg = dict(_CONFIG_DEFAULTS)
@@ -416,6 +525,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._serve_system_config()
         elif path == "/api/storage":
             self._send_json(get_storage_info())
+        elif path == "/api/units":
+            self._serve_units()
+        elif path == "/api/units/scan":
+            self._send_json({"devices": scan_network()})
         elif path.startswith("/archive/") or path.startswith("/renders/") or path == "/master.mp4":
             self._serve_video(path)
         else:
@@ -440,6 +553,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._storage_umount()
         elif parsed.path == "/api/storage/switch":
             self._storage_switch(body)
+        elif parsed.path == "/api/units":
+            self._add_unit(body)
+        elif parsed.path == "/api/units/remove":
+            self._remove_unit(body)
         else:
             self.send_error(404)
 
@@ -697,6 +814,61 @@ class Handler(http.server.BaseHTTPRequestHandler):
         _update_session_storage(new_base)
         label = "USB pendrive" if target == "usb" else "SD kártya"
         self._send_json({"ok": True, "message": f"Session tárhely átváltva: {label} ({new_base})"})
+
+    def _serve_units(self):
+        units = load_units()
+        status = read_unit_status()
+        enriched = []
+        for u in units:
+            st = status.get(u["name"], {})
+            # Prefer the forward service's live-resolved IP; fall back to the
+            # IP captured when the unit was added (e.g. right after an add,
+            # before the service has written its first status snapshot).
+            ip = st.get("ip") or u.get("ip")
+            enriched.append({**u, "ip": ip, "last_resolved": st.get("last_resolved")})
+        self._send_json({"units": enriched})
+
+    def _add_unit(self, body: dict):
+        name = str(body.get("name", "")).strip()
+        ip   = str(body.get("ip", "")).strip()
+        if not _UNIT_NAME_RE.match(name):
+            self._send_json({"ok": False, "error": "Érvénytelen név"})
+            return
+        if not _IP_RE.match(ip):
+            self._send_json({"ok": False, "error": "Érvénytelen IP-cím"})
+            return
+        units = load_units()
+        if any(u["name"] == name for u in units):
+            self._send_json({"ok": False, "error": "Már van ilyen nevű egység"})
+            return
+        if any(u.get("ip") == ip for u in units):
+            self._send_json({"ok": False, "error": "Ez az IP-cím már regisztrálva van"})
+            return
+        mac = resolve_mac_for_ip(ip)
+        if not mac:
+            self._send_json({"ok": False, "error":
+                f"Az eszköz nem érhető el ezen az IP-n ({ip}). Ellenőrizd, hogy be "
+                "van-e kapcsolva és csatlakozik-e ugyanahhoz a hálózathoz."})
+            return
+        if any(u["mac"] == mac for u in units):
+            self._send_json({"ok": False, "error": "Ez az eszköz (MAC-cím alapján) már regisztrálva van másik IP-vel"})
+            return
+        port = next_free_port(units)
+        units.append({"name": name, "mac": mac, "ip": ip, "port": port})
+        save_units(units)
+        restart_unit_forward()
+        self._send_json({"ok": True, "port": port, "mac": mac})
+
+    def _remove_unit(self, body: dict):
+        name = str(body.get("name", "")).strip()
+        units = load_units()
+        new_units = [u for u in units if u["name"] != name]
+        if len(new_units) == len(units):
+            self._send_json({"ok": False, "error": "Nincs ilyen nevű egység"})
+            return
+        save_units(new_units)
+        restart_unit_forward()
+        self._send_json({"ok": True})
 
     def _send_test_email(self):
         script_path = os.path.join(SCRIPT_DIR, "send_alert.py")

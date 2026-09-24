@@ -174,6 +174,32 @@ sudo systemctl daemon-reload
 
 ---
 
+## Új egységek hozzáadása (pl. WiFiGateway)
+
+Az ESP32C6-tól eltérő, saját WiFi-vel rendelkező egységek (pl. a `../WiFiGateway` ESP32-C3, ami a zigbee gateway-t köti WiFi-re UART-on át) **nem igényelnek fordító-proxyt** – ezek maguk szolgálják ki a teljes webes felületüket és REST API-jukat, közvetlenül a LAN-on. A `wifigw-forward` szolgáltatás ehhez csak egy **teljesen átlátszó (byte-for-byte) HTTP forward**-ot ad: egy saját port az Orange Pi-n, ami egyszerűen továbbítja a forgalmat az egység saját IP-jére – nem módosítja, nem értelmezi a tartalmat.
+
+**Egység hozzáadása** a webes vezérlőn (**http://192.168.68.177:8082/**, vagy Meshneten **http://100.68.70.151:8082/**) keresztül:
+1. Nyisd meg a *Rendszerbeállítások* kártyát, majd a *🔌 Egységek (WiFi gateway-ek)* összecsukható szekciót.
+2. Kattints a *🔍 Hálózat pásztázása* gombra – ez kilistázza az Orange Pi ARP-táblájában épp látható MAC/IP párokat, hogy ne kelljen kézzel begépelni a MAC-címet.
+3. Add meg az egység nevét, válaszd ki (vagy írd be) a MAC-címét, majd *➕ Egység hozzáadása*.
+4. A rendszer automatikusan kioszt egy szabad portot (8084-től felfelé), elmenti a konfigurációt (`timelapse_config.json`), és újraindítja a `wifigw-forward` service-t.
+5. Pár másodpercen belül az egység listájában megjelenik a feloldott IP, és a *Megnyitás* linkre kattintva közvetlenül az egység saját (változatlan) webes felülete nyílik meg, az Orange Pi új portján keresztül.
+
+**Miért MAC-cím, nem fix IP?** Ezek az egységek csak DHCP-t támogatnak (nincs mDNS, nincs statikus IP a firmware-ben), ezért a `wifigw-forward` service percenként újrafeloldja az IP-t a MAC-cím alapján az ARP-táblából – ha a router új IP-t ad, a forward automatikusan követi, nem kell kézzel semmit módosítani.
+
+```bash
+# Státusz
+systemctl status wifigw-forward
+
+# Élő log (MAC-feloldás, forward hibák)
+journalctl -u wifigw-forward -f
+
+# Kézi újraindítás (a webes vezérlő is ezt hívja egység hozzáadás/törlés után)
+sudo systemctl restart wifigw-forward
+```
+
+---
+
 ## ESP32C6 firmware frissítése (távoli flash)
 
 Az ESP32C6 az Orange Pi USB portjára csatlakoztatva távolról is felflashelhető.

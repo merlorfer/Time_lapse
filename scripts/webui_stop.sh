@@ -4,7 +4,7 @@
 # A timelapse felvétel (cron) fut tovább.
 # =============================================================================
 
-SERVICES="esp32-proxy esp32-serial timelapse-web timelapse-http"
+SERVICES="esp32-proxy esp32-serial timelapse-web timelapse-http wifigw-forward"
 
 echo "WebUI szolgáltatások leállítása..."
 for svc in $SERVICES; do
