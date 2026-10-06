@@ -31,6 +31,7 @@ import http.client
 CONFIG_FILE      = "/home/orangepi/timelapse/timelapse_config.json"
 STATUS_FILE      = "/tmp/wifigw_status.json"
 ARP_RECHECK_SEC  = 60
+SLOW_LOG_SEC     = 5.0   # log upstream responses slower than this
 UPSTREAM_TIMEOUT = 20.0  # weak WiFi: applies to connect and every socket read
 
 _HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate",
@@ -172,11 +173,16 @@ def make_handler(state: UnitState):
             headers = {k: v for k, v in self.headers.items()
                        if k.lower() not in _HOP_BY_HOP}
 
+            started = time.monotonic()
             try:
                 conn = http.client.HTTPConnection(ip, 80, timeout=UPSTREAM_TIMEOUT)
                 conn.request(self.command, self.path, body=body, headers=headers)
                 resp = conn.getresponse()
                 data = resp.read()
+                elapsed = time.monotonic() - started
+                if elapsed > SLOW_LOG_SEC:
+                    print(f"[{state.name}] slow upstream: {self.command} {self.path} "
+                          f"took {elapsed:.1f}s")
                 self.send_response(resp.status)
                 for k, v in resp.getheaders():
                     if k.lower() not in _HOP_BY_HOP:
@@ -185,6 +191,8 @@ def make_handler(state: UnitState):
                 self.wfile.write(data)
                 conn.close()
             except Exception as exc:
+                print(f"[{state.name}] upstream error: {self.command} {self.path} -> "
+                      f"{exc!r} after {time.monotonic() - started:.1f}s (ip {ip})")
                 self._send_error(502, f"Nem sikerült elérni az egységet ({ip}): {exc}")
 
         def _send_error(self, code, message):
