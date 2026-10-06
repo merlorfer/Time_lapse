@@ -200,6 +200,27 @@ sudo systemctl restart wifigw-forward
 
 ---
 
+## Szenzorfigyelés és ESP32 konzol több egységgel
+
+A szenzorok mentését az önálló `sensor-collector` szolgáltatás végzi, **minden aktív forrásból egyszerre**:
+- **UART** – a közvetlenül USB-n csatlakoztatott ESP32 (az `esp32-proxy` `:8083` porton át), csak ha a soros kapcsoló be van kapcsolva;
+- minden, az *Egységek* listában felvett WiFiGateway egység (a saját forward portján át).
+
+A mentés periodikus lekérdezéssel megy, de a CSV-sor időbélyege az eszköz saját `last_update` ideje (a változás tényleges időpontja), és új sor csak akkor készül, ha az érték is megváltozott. A fájlok neve `Forrás-szenzornév.csv` (`UART-…`, `WiFiGateway-…`), a régi, előtag nélküli CSV-k változatlanok maradnak és a grafikonon együtt látszanak.
+
+**Beállítás** a webes vezérlőn (`:8082`) → *Rendszerbeállítások* → *📈 Szenzor adatmentés*:
+- *Van soros (USB) egység csatlakoztatva* kapcsoló. Kikapcsolva a soros forrást sem a gyűjtő, sem a konzol nem keresi. Bekapcsolva, de érzékelhető egység nélkül a kapcsoló mellett figyelmeztetés jelenik meg.
+- Forrásonként (UART + minden egység) kiválasztható, mely szenzorok mentődjenek és milyen időközönként.
+
+**Konzol**: a *Logok* kártya *🖥 ESP32* fülén a legördülő menüből választható, melyik forrás soros kimenetét látod (egyszerre egyet). A WiFiGateway egységek a saját gateway-lokális log pufferüket adják (`/api/gw/serial-log`).
+
+```bash
+systemctl status sensor-collector
+journalctl -u sensor-collector -f
+```
+
+---
+
 ## ESP32C6 firmware frissítése (távoli flash)
 
 Az ESP32C6 az Orange Pi USB portjára csatlakoztatva távolról is felflashelhető.

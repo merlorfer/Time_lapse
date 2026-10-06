@@ -3,7 +3,7 @@
 # webui_start.sh – WebUI szolgáltatások elindítása
 # =============================================================================
 
-SERVICES="esp32-serial esp32-proxy timelapse-web timelapse-http wifigw-forward"
+SERVICES="esp32-serial esp32-proxy timelapse-web timelapse-http wifigw-forward sensor-collector"
 
 echo "WebUI szolgáltatások indítása..."
 for svc in $SERVICES; do

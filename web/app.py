@@ -5,6 +5,7 @@ Port: 8082
 """
 
 import csv
+import http.client
 import http.server
 import ipaddress
 import json
@@ -53,7 +54,66 @@ _CONFIG_DEFAULTS = {
     "master_days_enabled": False,
     "master_days":         7,
     "units":               [],
+    "serial_enabled":      True,
+    "sensor_sources":      {},
 }
+
+# ── Sensor sources (UART via esp32_proxy on :8083 + WiFi gateway units) ───────
+UART_PROXY_PORT      = 8083
+UART_SOURCE_KEY      = "UART"
+LEGACY_SENSOR_CONFIG = "/home/orangepi/esp32/sensor_config.json"
+
+def _http_get_json(port: int, path: str, timeout: float = 3.0):
+    """GET http://127.0.0.1:<port><path> -> parsed JSON, raises on any failure."""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    try:
+        conn.request("GET", path)
+        resp = conn.getresponse()
+        data = resp.read()
+        if resp.status != 200:
+            raise RuntimeError(f"HTTP {resp.status}")
+        return json.loads(data)
+    finally:
+        conn.close()
+
+def probe_serial_detected() -> bool:
+    """Is a serially-connected ESP32 actually reachable through esp32_proxy?
+    Only call this when serial_enabled is on -- the off state must not probe."""
+    try:
+        return _http_get_json(UART_PROXY_PORT, "/api/ble-status", timeout=1.5).get("serial") is True
+    except Exception:
+        return False
+
+def source_port(source: str, cfg: dict):
+    """Local loopback port serving the given source, or None if unknown/disabled."""
+    if source == UART_SOURCE_KEY:
+        return UART_PROXY_PORT if cfg.get("serial_enabled", True) else None
+    for u in cfg.get("units", []):
+        if u["name"] == source:
+            return u["port"]
+    return None
+
+def migrate_legacy_sensor_config():
+    """One-time import of the old esp32_proxy per-device sensor settings into
+    sensor_sources["UART"]; the old file is left untouched as a backup."""
+    cfg = load_system_config()
+    sources = cfg.get("sensor_sources", {})
+    if UART_SOURCE_KEY in sources or not os.path.isfile(LEGACY_SENSOR_CONFIG):
+        return
+    try:
+        with open(LEGACY_SENSOR_CONFIG) as f:
+            legacy = json.load(f)
+        migrated = {
+            ieee: {"enabled": bool(c.get("enabled", False)),
+                   "interval_min": max(1, int(c.get("interval_min", 60)))}
+            for ieee, c in legacy.items() if isinstance(c, dict)
+        }
+        sources[UART_SOURCE_KEY] = migrated
+        cfg["sensor_sources"] = sources
+        save_system_config(cfg)
+        print(f"[migrate] imported {len(migrated)} legacy sensor settings into UART")
+    except Exception as exc:
+        print(f"[migrate] legacy sensor config import failed: {exc}")
 
 # ── WiFi gateway units (transparent forward, see wifigw_forward.py) ────────────
 UNIT_STATUS_FILE  = "/tmp/wifigw_status.json"
@@ -512,7 +572,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/serial-log":
             qs    = parse_qs(parsed.query)
             lines = min(int(qs.get("lines", ["200"])[0]), 1000)
-            self._serve_serial_log(lines)
+            source = qs.get("source", [UART_SOURCE_KEY])[0]
+            self._serve_serial_log(lines, source)
+        elif path == "/api/serial-enabled":
+            self._serve_serial_enabled()
+        elif path == "/api/sensor-sources":
+            self._serve_sensor_sources()
+        elif path == "/api/sensor-devices":
+            qs = parse_qs(parsed.query)
+            self._serve_sensor_devices(qs.get("source", [UART_SOURCE_KEY])[0])
+        elif path == "/api/sensor-config":
+            self._send_json({"sources": load_system_config().get("sensor_sources", {})})
         elif path == "/api/sensor-dates":
             self._send_json({"dates": list_sensor_dates()})
         elif path == "/api/sensor-data":
@@ -557,6 +627,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._add_unit(body)
         elif parsed.path == "/api/units/remove":
             self._remove_unit(body)
+        elif parsed.path == "/api/serial-enabled":
+            self._set_serial_enabled(body)
+        elif parsed.path == "/api/sensor-config":
+            self._save_sensor_config(body)
         else:
             self.send_error(404)
 
@@ -646,14 +720,110 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content)
 
-    def _serve_serial_log(self, lines: int):
+    def _serve_serial_log(self, lines: int, source: str = UART_SOURCE_KEY):
+        cfg = load_system_config()
+        if source == UART_SOURCE_KEY:
+            if not cfg.get("serial_enabled", True):
+                # Toggle off: do not touch the serial log at all.
+                self._send_json({"available": False, "disabled": True, "lines": []})
+                return
+            try:
+                r = subprocess.run(["tail", f"-{lines}", SERIAL_LOG_FILE],
+                                   capture_output=True, text=True, errors="replace")
+                available = os.path.isfile(SERIAL_LOG_FILE)
+                self._send_json({"available": available, "disabled": False,
+                                 "lines": r.stdout.splitlines()})
+            except Exception:
+                self._send_json({"available": False, "disabled": False, "lines": []})
+            return
+
+        port = source_port(source, cfg)
+        if port is None:
+            self._send_json({"available": False, "disabled": False, "lines": [],
+                             "error": "ismeretlen egység"})
+            return
         try:
-            r = subprocess.run(["tail", f"-{lines}", SERIAL_LOG_FILE],
-                               capture_output=True, text=True, errors="replace")
-            available = os.path.isfile(SERIAL_LOG_FILE)
-            self._send_json({"available": available, "lines": r.stdout.splitlines()})
+            d = _http_get_json(port, "/api/gw/serial-log", timeout=10.0)
+            self._send_json({"available": True, "disabled": False,
+                             "lines": d.get("lines", [])[-lines:]})
         except Exception:
-            self._send_json({"available": False, "lines": []})
+            self._send_json({"available": False, "disabled": False, "lines": []})
+
+    def _serve_serial_enabled(self):
+        enabled = bool(load_system_config().get("serial_enabled", True))
+        # detected is null when off: the off state must not probe anything.
+        self._send_json({"enabled": enabled,
+                         "detected": probe_serial_detected() if enabled else None})
+
+    def _set_serial_enabled(self, body: dict):
+        cfg = load_system_config()
+        cfg["serial_enabled"] = bool(body.get("enabled", True))
+        try:
+            save_system_config(cfg)
+            self._send_json({"ok": True})
+        except Exception as e:
+            self._send_json({"ok": False, "error": str(e)})
+
+    def _serve_sensor_sources(self):
+        cfg = load_system_config()
+        sources = [{"key": UART_SOURCE_KEY, "label": "Soros (UART)",
+                    "available": bool(cfg.get("serial_enabled", True))}]
+        for u in cfg.get("units", []):
+            sources.append({"key": u["name"], "label": u["name"],
+                            "port": u["port"], "available": True})
+        self._send_json({"sources": sources})
+
+    def _serve_sensor_devices(self, source: str):
+        cfg = load_system_config()
+        port = source_port(source, cfg)
+        if port is None:
+            self._send_json({"ok": False,
+                             "error": "disabled" if source == UART_SOURCE_KEY else "ismeretlen forrás"})
+            return
+        try:
+            d = _http_get_json(port, "/api/devices", timeout=30.0)
+        except Exception as e:
+            self._send_json({"ok": False, "error": str(e)})
+            return
+        devices = []
+        for dev in d.get("devices", []):
+            if "sensor" not in dev:
+                continue
+            devices.append({
+                "ieee_addr":   dev.get("ieee_addr", ""),
+                "name":        dev.get("custom_name") or dev.get("ieee_addr", ""),
+                "device_type": dev.get("device_type", ""),
+            })
+        self._send_json({"ok": True, "devices": devices})
+
+    def _save_sensor_config(self, body: dict):
+        source = str(body.get("source", "")).strip()
+        raw    = body.get("config", {})
+        cfg = load_system_config()
+        if source != UART_SOURCE_KEY and not any(u["name"] == source for u in cfg.get("units", [])):
+            self._send_json({"ok": False, "error": "Ismeretlen forrás"})
+            return
+        if not isinstance(raw, dict):
+            self._send_json({"ok": False, "error": "Érvénytelen konfiguráció"})
+            return
+        clean = {}
+        for ieee, c in raw.items():
+            if not isinstance(c, dict):
+                continue
+            try:
+                interval = max(1, int(c.get("interval_min", 60)))
+            except (ValueError, TypeError):
+                interval = 60
+            clean[str(ieee)] = {"enabled": bool(c.get("enabled", False)),
+                                "interval_min": interval}
+        sources = cfg.get("sensor_sources", {})
+        sources[source] = clean
+        cfg["sensor_sources"] = sources
+        try:
+            save_system_config(cfg)
+            self._send_json({"ok": True})
+        except Exception as e:
+            self._send_json({"ok": False, "error": str(e)})
 
     def _serve_logs(self, log_type: str, lines: int):
         if log_type not in ("capture", "compile"):
@@ -834,6 +1004,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not _UNIT_NAME_RE.match(name):
             self._send_json({"ok": False, "error": "Érvénytelen név"})
             return
+        if name.lower() == UART_SOURCE_KEY.lower():
+            self._send_json({"ok": False, "error": f"A(z) \"{UART_SOURCE_KEY}\" név foglalt (a soros forrás neve)"})
+            return
         if not _IP_RE.match(ip):
             self._send_json({"ok": False, "error": "Érvénytelen IP-cím"})
             return
@@ -917,6 +1090,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    migrate_legacy_sensor_config()
     server = http.server.ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"Timelapse Web UI → http://{HOST}:{PORT}")
     server.serve_forever()

@@ -9,10 +9,8 @@ Requires: pip3 install bleak
 
 import asyncio
 import collections
-import csv
 import json
 import os
-import queue
 import re
 import signal
 import shutil
@@ -40,12 +38,7 @@ SERIAL_BUF_LINES  = 500
 SCREEN_SESSION    = "esp32serial"
 SERIAL_CMD_TIMEOUT = 15.0  # seconds to wait for >>> response
 
-SENSOR_CONFIG_FILE = "/home/orangepi/esp32/sensor_config.json"
-SENSOR_DATA_DIR    = "/tmp/sensor_data"
 SERIAL_LOG_FILE    = "/tmp/esp32_serial.log"
-CSV_FIELDS         = ["timestamp", "temperature", "humidity",
-                      "water_level", "lower_active", "upper_active",
-                      "valid", "error"]
 
 # =============================================================================
 # Serial log reader  (tails the screen log file – screen holds the port)
@@ -82,8 +75,6 @@ def _serial_reader_thread():
                             if text:
                                 with _serial_lock:
                                     _serial_buf.append({"t": time.strftime("%H:%M:%S"), "msg": text})
-                                if _SENSOR_DATA_RE.search(text):
-                                    _sensor_event_q.put(time.time())
                     else:
                         # Check file still exists (screen may restart)
                         if not os.path.exists(SERIAL_LOG_FILE):
@@ -345,236 +336,6 @@ def _start_ble_thread():
     asyncio.set_event_loop(_loop)
     _loop.create_task(_ble_init())
     _loop.run_forever()
-
-
-# =============================================================================
-# Sensor config
-# =============================================================================
-
-_sensor_config: dict = {}       # {ieee_addr: {enabled, interval_min}}
-_sensor_runtime: dict = {}      # {ieee_addr: {consecutive_failures, suspended, last_ok}}
-_sensor_cfg_lock = threading.Lock()
-_last_sensor_values: dict = {}  # {ieee_addr: row_dict} – last saved reading (serial mode change detection)
-_sensor_event_q: queue.SimpleQueue = queue.SimpleQueue()  # fires when serial log shows a sensor report
-_SENSOR_DATA_RE = re.compile(r'SCHEDULER_TASK.*sensor data:', re.IGNORECASE)
-
-
-def _load_sensor_config():
-    global _sensor_config
-    try:
-        with open(SENSOR_CONFIG_FILE) as f:
-            _sensor_config = json.load(f)
-    except FileNotFoundError:
-        _sensor_config = {}
-    except Exception as exc:
-        print(f"[SENSOR] Config load error: {exc}")
-        _sensor_config = {}
-
-
-def _save_sensor_config():
-    try:
-        with open(SENSOR_CONFIG_FILE, "w") as f:
-            json.dump(_sensor_config, f, indent=2)
-    except Exception as exc:
-        print(f"[SENSOR] Config save error: {exc}")
-
-
-SENSOR_SUSPEND_MINUTES = 60
-
-def _get_runtime(ieee: str) -> dict:
-    if ieee not in _sensor_runtime:
-        _sensor_runtime[ieee] = {"consecutive_failures": 0, "suspended": False,
-                                  "suspended_at": None, "last_ok": None}
-    return _sensor_runtime[ieee]
-
-
-# =============================================================================
-# Sensor data collection
-# =============================================================================
-
-def _ble_connect_sync(timeout: int = 15) -> bool:
-    """Connect via BLE from a regular thread. Returns True on success."""
-    try:
-        result = asyncio.run_coroutine_threadsafe(
-            ble_connect_async(), _loop).result(timeout=timeout)
-        return result.get("ok", False)
-    except Exception as exc:
-        print(f"[SENSOR] BLE connect failed: {exc}")
-        return False
-
-
-def _ble_disconnect_sync():
-    try:
-        asyncio.run_coroutine_threadsafe(
-            ble_disconnect_async(), _loop).result(timeout=5)
-    except Exception:
-        pass
-
-
-def _extract_reading(dev: dict) -> dict:
-    sensor = dev.get("sensor", {})
-    dtype  = dev.get("device_type", "")
-    err    = dev.get("error", {})
-    row    = {}
-    if "temperature" in dtype or "temperature" in sensor:
-        row["temperature"] = sensor.get("current_value", "")
-        row["humidity"]    = sensor.get("humidity", "")
-    elif "humidity" in dtype:
-        row["humidity"] = sensor.get("current_value", "")
-    elif "water_level" in dtype or "leak" in dtype:
-        row["water_level"]  = sensor.get("current_value", "")
-        row["lower_active"] = int(bool(sensor.get("lower_active")))
-        row["upper_active"] = int(bool(sensor.get("upper_active")))
-        row["valid"]        = int(bool(sensor.get("valid")))
-    row["error"] = err.get("message", "") if err else ""
-    return row
-
-
-def _save_reading(dev: dict, ts: str, date: str, check_changed: bool = False):
-    ieee = dev["ieee_addr"]
-    name = (dev.get("custom_name") or ieee.replace("0x", "")).replace("/", "_")
-    day_dir = os.path.join(SENSOR_DATA_DIR, date)
-    os.makedirs(day_dir, exist_ok=True)
-    filepath = os.path.join(day_dir, f"{name}.csv")
-    reading = _extract_reading(dev)
-    if check_changed:
-        prev = _last_sensor_values.get(ieee)
-        # Compare only the measurement fields (ignore timestamp and error)
-        measure_keys = [k for k in reading if k not in ("error",)]
-        if prev and all(str(reading.get(k, "")) == str(prev.get(k, "")) for k in measure_keys):
-            return  # value unchanged – skip
-    _last_sensor_values[ieee] = reading
-    row = {"timestamp": ts}
-    row.update(reading)
-    write_header = not os.path.isfile(filepath)
-    with open(filepath, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction="ignore")
-        if write_header:
-            writer.writeheader()
-        writer.writerow({k: row.get(k, "") for k in CSV_FIELDS})
-
-
-def _collect_now(to_collect: list, check_changed: bool = False):
-    """Collect sensor readings via serial (preferred) or BLE."""
-    use_serial = _serial_available and _screen_running()
-
-    if not use_serial:
-        # BLE path: connect first (max 2 attempts)
-        success = False
-        for attempt in range(2):
-            if _ble_connect_sync():
-                success = True
-                break
-            if attempt == 0:
-                print("[SENSOR] Attempt 1 failed, retrying in 10 s…")
-                time.sleep(10)
-        if not success:
-            with _sensor_cfg_lock:
-                for ieee in to_collect:
-                    rt = _get_runtime(ieee)
-                    rt["consecutive_failures"] += 1
-                    if rt["consecutive_failures"] >= 3:
-                        rt["suspended"]    = True
-                        rt["suspended_at"] = time.time()
-                        print(f"[SENSOR] {ieee} suspended after 3 consecutive failures")
-            return
-
-    try:
-        data    = device_call("get_devices", {})
-        devices = data.get("devices", [])
-        ts      = time.strftime("%Y-%m-%d %H:%M:%S")
-        date    = time.strftime("%Y-%m-%d")
-        for dev in devices:
-            ieee = dev["ieee_addr"]
-            if ieee not in to_collect:
-                continue
-            _save_reading(dev, ts, date, check_changed=check_changed)
-            print(f"[SENSOR] Saved reading for {dev.get('custom_name', ieee)}")
-            with _sensor_cfg_lock:
-                rt = _get_runtime(ieee)
-                rt["consecutive_failures"] = 0
-                rt["suspended"]            = False
-                rt["last_ok"]              = ts
-    except Exception as exc:
-        print(f"[SENSOR] Collection error: {exc}")
-        if not use_serial:
-            with _sensor_cfg_lock:
-                for ieee in to_collect:
-                    rt = _get_runtime(ieee)
-                    rt["consecutive_failures"] += 1
-                    if rt["consecutive_failures"] >= 3:
-                        rt["suspended"]    = True
-                        rt["suspended_at"] = time.time()
-                        print(f"[SENSOR] {ieee} suspended after 3 consecutive failures")
-    finally:
-        if not use_serial:
-            _ble_disconnect_sync()
-
-
-def _serial_sensor_watcher():
-    """In serial mode: watches for zigbee sensor report events and records only changed values.
-    Minimum interval between collects: sensor's interval_min (default 60s)."""
-    _last_collect: dict = {}  # {ieee: timestamp}
-    while True:
-        try:
-            _sensor_event_q.get(timeout=5)
-        except Exception:
-            continue
-        if not (_serial_available and _screen_running()):
-            continue
-        # Debounce: drain any extra events that arrived in the same burst
-        time.sleep(0.3)
-        try:
-            while True:
-                _sensor_event_q.get_nowait()
-        except Exception:
-            pass
-        now = time.time()
-        with _sensor_cfg_lock:
-            to_collect = []
-            for ieee, cfg in _sensor_config.items():
-                if not cfg.get("enabled") or _get_runtime(ieee).get("suspended"):
-                    continue
-                min_interval = max(1, cfg.get("interval_min", 60)) * 60
-                if now - _last_collect.get(ieee, 0) >= min_interval:
-                    to_collect.append(ieee)
-        if to_collect:
-            for ieee in to_collect:
-                _last_collect[ieee] = now
-            threading.Thread(
-                target=_collect_now, args=(to_collect,), kwargs={"check_changed": True},
-                daemon=True).start()
-
-
-def _sensor_scheduler():
-    """Wakes every minute: BLE interval polling + suspension auto-lift.
-    In serial mode polling is skipped (handled by _serial_sensor_watcher)."""
-    while True:
-        use_serial = _serial_available and _screen_running()
-        now_min = time.localtime().tm_hour * 60 + time.localtime().tm_min
-        to_collect = []
-        with _sensor_cfg_lock:
-            for ieee, cfg in _sensor_config.items():
-                if not cfg.get("enabled"):
-                    continue
-                rt = _get_runtime(ieee)
-                if rt["suspended"]:
-                    if rt.get("suspended_at") and \
-                       (time.time() - rt["suspended_at"]) >= SENSOR_SUSPEND_MINUTES * 60:
-                        rt["suspended"]          = False
-                        rt["consecutive_failures"] = 0
-                        print(f"[SENSOR] {ieee} suspension lifted after {SENSOR_SUSPEND_MINUTES} min")
-                    else:
-                        continue
-                # BLE mode only: poll at configured interval
-                if not use_serial:
-                    interval = max(1, cfg.get("interval_min", 60))
-                    if now_min % interval == 0:
-                        to_collect.append(ieee)
-        if to_collect:
-            threading.Thread(target=_collect_now, args=(to_collect,), daemon=True).start()
-        # Sleep until next minute boundary
-        time.sleep(60 - time.localtime().tm_sec + 1)
 
 
 # =============================================================================
@@ -843,18 +604,6 @@ class Handler(BaseHTTPRequestHandler):
                 "serial": serial_ok,
                 "transport": "serial" if serial_ok else ("ble" if connected else "none"),
             })
-        elif self.path == "/api/sensor-config":
-            with _sensor_cfg_lock:
-                cfg_copy = dict(_sensor_config)
-            runtime = {ieee: {"suspended": _get_runtime(ieee)["suspended"],
-                               "consecutive_failures": _get_runtime(ieee)["consecutive_failures"],
-                               "last_ok": _get_runtime(ieee)["last_ok"]}
-                       for ieee in cfg_copy}
-            self._send_json(200, {"config": cfg_copy, "runtime": runtime})
-        elif self.path == "/api/sensor-status":
-            with _sensor_cfg_lock:
-                status = {ieee: _get_runtime(ieee) for ieee in _sensor_config}
-            self._send_json(200, status)
         elif self.path == "/api/proxy/rules.txt":
             self._export_rules()
         elif self.path == "/api/proxy/config.json":
@@ -895,20 +644,6 @@ class Handler(BaseHTTPRequestHandler):
             self._import_rules()
         elif self.path == "/api/proxy/config.json":
             self._import_config()
-        elif self.path == "/api/sensor-config":
-            body = self._read_body()
-            with _sensor_cfg_lock:
-                for ieee, cfg in body.items():
-                    _sensor_config[ieee] = {
-                        "enabled":      bool(cfg.get("enabled", False)),
-                        "interval_min": max(1, int(cfg.get("interval_min", 60))),
-                    }
-                    # Reset suspension when config is updated
-                    rt = _get_runtime(ieee)
-                    rt["suspended"]            = False
-                    rt["consecutive_failures"] = 0
-                _save_sensor_config()
-            self._send_json(200, {"ok": True})
         elif self.path.startswith("/api/"):
             self._handle_api()
         else:
@@ -930,11 +665,8 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
 
-    _load_sensor_config()
     threading.Thread(target=_start_ble_thread, daemon=True).start()
     threading.Thread(target=_serial_reader_thread, daemon=True).start()
-    threading.Thread(target=_sensor_scheduler, daemon=True).start()
-    threading.Thread(target=_serial_sensor_watcher, daemon=True).start()
     _ready.wait()
 
     print(f"[HTTP] ESP32C6 proxy on :{HTTP_PORT}")

@@ -31,7 +31,7 @@ import http.client
 CONFIG_FILE      = "/home/orangepi/timelapse/timelapse_config.json"
 STATUS_FILE      = "/tmp/wifigw_status.json"
 ARP_RECHECK_SEC  = 60
-CONNECT_TIMEOUT  = 5.0
+UPSTREAM_TIMEOUT = 20.0  # weak WiFi: applies to connect and every socket read
 
 _HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate",
                "proxy-authorization", "te", "trailers",
@@ -173,7 +173,7 @@ def make_handler(state: UnitState):
                        if k.lower() not in _HOP_BY_HOP}
 
             try:
-                conn = http.client.HTTPConnection(ip, 80, timeout=CONNECT_TIMEOUT)
+                conn = http.client.HTTPConnection(ip, 80, timeout=UPSTREAM_TIMEOUT)
                 conn.request(self.command, self.path, body=body, headers=headers)
                 resp = conn.getresponse()
                 data = resp.read()
