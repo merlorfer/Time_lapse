@@ -2,12 +2,14 @@
 # =============================================================================
 # safe_reboot.sh – Adatok mentése, majd újraindítás
 # Menti a ramdisken lévő képkockákat és szenzor adatokat, majd rebootol.
+# SAFE_ACTION=poweroff környezeti változóval leállít (lásd safe_shutdown.sh).
 # =============================================================================
 
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 source "$SCRIPT_DIR/config.sh"
 [ -f /tmp/timelapse_session.conf ] && source /tmp/timelapse_session.conf
 
+ACTION="${SAFE_ACTION:-reboot}"   # reboot | poweroff
 LOG="${LOG_DIR}/safe_reboot.log"
 mkdir -p "$LOG_DIR"
 
@@ -80,10 +82,16 @@ cat > "$PRE_REBOOT_STATE" <<EOF
   "session_interval": "$SESSION_INTERVAL",
   "session_storage": "$SESSION_STORAGE",
   "reboot_time": "$(date --iso-8601=seconds)",
-  "reboot_reason": "scheduled"
+  "reboot_reason": "$([ "$ACTION" = poweroff ] && echo shutdown || echo scheduled)"
 }
 EOF
 log "Pre-reboot state mentve → $PRE_REBOOT_STATE (timelapse_active=$TL_ACTIVE)"
 
-log "=== Mentés kész, újraindítás... ==="
-sudo reboot
+if [ "$ACTION" = "poweroff" ]; then
+    log "=== Mentés kész, leállítás... ==="
+    sync
+    sudo systemctl poweroff
+else
+    log "=== Mentés kész, újraindítás... ==="
+    sudo reboot
+fi

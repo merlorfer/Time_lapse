@@ -615,6 +615,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._save_system_config(body)
         elif parsed.path == "/api/safe-reboot":
             self._trigger_safe_reboot()
+        elif parsed.path == "/api/safe-shutdown":
+            self._trigger_safe_shutdown()
         elif parsed.path == "/api/test-email":
             self._send_test_email()
         elif parsed.path == "/api/storage/mount":
@@ -904,15 +906,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json({"ok": False, "errors": [str(e)]})
 
-    def _trigger_safe_reboot(self):
-        script_path = os.path.join(SCRIPT_DIR, "safe_reboot.sh")
+    def _trigger_safe_script(self, name: str, message: str):
+        script_path = os.path.join(SCRIPT_DIR, name)
         if not os.path.isfile(script_path):
-            self._send_json({"ok": False, "output": "safe_reboot.sh nem található"})
+            self._send_json({"ok": False, "output": f"{name} nem található"})
             return
-        self._send_json({"ok": True, "output": "Biztonságos újraindítás folyamatban..."})
+        self._send_json({"ok": True, "output": message})
         threading.Thread(target=lambda: subprocess.run(
             ["bash", script_path], capture_output=True
         ), daemon=True).start()
+
+    def _trigger_safe_reboot(self):
+        self._trigger_safe_script("safe_reboot.sh", "Biztonságos újraindítás folyamatban...")
+
+    def _trigger_safe_shutdown(self):
+        self._trigger_safe_script("safe_shutdown.sh", "Biztonságos leállítás folyamatban...")
 
     def _storage_mount(self, body: dict):
         dev = str(body.get("device", "")).strip()

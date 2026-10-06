@@ -470,6 +470,24 @@ button:disabled { opacity: .35; cursor: not-allowed; }
         <div id="st-result" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
       </div>
     </div>
+    <!-- Biztonságos leállítás (összecsukható) -->
+    <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
+      <button onclick="toggleSimplePanel('shutdown')" style="background:none;border:none;color:var(--muted);
+              font-size:12px;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px">
+        <span id="shutdown-arrow" style="font-size:10px">▶</span>
+        ⏻ Biztonságos leállítás
+      </button>
+      <div id="shutdown-panel" style="display:none;margin-top:14px">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.5">
+          Elmenti a ramdiskre gyűjtött képkockákat és szenzoradatokat, majd leállítja az Orange Pi-t.
+          Leállás után csak áramtalanítással indítható újra, és a webes felület nem lesz elérhető.
+        </div>
+        <div class="btn-grid">
+          <button class="btn-red" onclick="triggerSafeShutdown()" id="safe-shutdown-btn">⏻ Biztonságos leállítás</button>
+        </div>
+        <div id="shutdown-result" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
+      </div>
+    </div>
   </div>
 
 </main>
@@ -1070,6 +1088,27 @@ function toggleSimplePanel(name) {
   const open = panel.style.display === 'none';
   panel.style.display = open ? 'block' : 'none';
   arrow.textContent = open ? '▼' : '▶';
+}
+
+async function triggerSafeShutdown() {
+  if (!confirm('Biztonságosan leállítod az Orange Pi-t?\n\nLeállás után csak áramtalanítással indítható újra.')) return;
+  const btn = document.getElementById('safe-shutdown-btn');
+  const res = document.getElementById('shutdown-result');
+  btn.disabled = true;
+  res.style.color = 'var(--muted)';
+  res.textContent = 'Mentés és leállítás folyamatban...';
+  try {
+    const r = await api('/api/safe-shutdown', 'POST', {});
+    res.style.color = r.ok ? 'var(--green)' : 'var(--red)';
+    res.textContent = r.ok
+      ? 'Mentés megkezdődött, az Orange Pi hamarosan leáll. A LED kialvása után húzhatod ki a tápot.'
+      : (r.output || 'Hiba');
+    if (!r.ok) btn.disabled = false;
+  } catch (e) {
+    res.style.color = 'var(--red)';
+    res.textContent = 'Hálózati hiba';
+    btn.disabled = false;
+  }
 }
 
 function toggleUnitsPanel() {
