@@ -110,6 +110,23 @@ button:disabled { opacity: .35; cursor: not-allowed; }
 
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 @media (max-width: 640px) { .two-col { grid-template-columns: 1fr; } }
+.chart-wrap { position:relative; background:#0a1020; border-radius:8px; padding:12px; }
+.chart-fs-bar { display:none; }
+#sensor-chart-box { position:relative; }
+#sensor-chart { width:100%; max-height:380px; }
+.chart-wrap.fs { position:fixed; inset:0; z-index:9999; border-radius:0; padding:6px 10px;
+                 display:flex; flex-direction:column; }
+.chart-wrap.fs .chart-fs-bar { display:flex; align-items:center; gap:10px; margin-bottom:4px; }
+.chart-wrap.fs #sensor-chart-box { flex:1; min-height:0; }
+.chart-wrap.fs #sensor-chart { max-height:none; }
+.chart-fs-legend { display:none; }
+.chart-wrap.chips .chart-fs-legend { display:flex; flex-wrap:wrap; gap:6px; padding-top:8px; }
+.chart-wrap.fs .chart-fs-legend { box-sizing:border-box; max-height:71px; overflow-y:auto; padding-top:6px; }
+.chart-chip { display:inline-flex; align-items:center; gap:6px; padding:3px 9px; font-size:12px;
+              border:1px solid #313244; border-radius:14px; color:#cdd6f4; background:#11182a;
+              cursor:pointer; max-width:100%; box-sizing:border-box; }
+.chart-chip.off { opacity:.35; text-decoration:line-through; }
+.chart-chip i { width:10px; height:10px; border-radius:50%; display:inline-block; }
 </style>
 </head>
 <body>
@@ -258,10 +275,17 @@ button:disabled { opacity: .35; cursor: not-allowed; }
           <input type="date" id="sensor-to" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;margin-left:6px;">
         </label>
         <button class="btn-blue" onclick="loadSensorChart()">Betöltés</button>
+        <button class="btn-gray" onclick="toggleSensorFullscreen()">⛶ Teljes képernyő</button>
         <span id="sensor-status" style="font-size:12px;color:var(--muted);"></span>
       </div>
-      <div style="position:relative;background:#0a1020;border-radius:8px;padding:12px;">
-        <canvas id="sensor-chart" style="width:100%;max-height:380px;"></canvas>
+      <div id="sensor-chart-wrap" class="chart-wrap">
+        <div class="chart-fs-bar">
+          <span style="font-size:13px;color:var(--text);font-weight:600">📊 Szenzor adatok</span>
+          <span id="chart-fs-hint" style="font-size:12px;color:var(--yellow);flex:1"></span>
+          <button class="btn-gray" style="padding:4px 12px" onclick="toggleSensorFullscreen()">✕ Bezár</button>
+        </div>
+        <div id="sensor-chart-box"><canvas id="sensor-chart"></canvas></div>
+        <div id="chart-fs-legend" class="chart-fs-legend"></div>
         <div id="sensor-no-data" style="display:none;text-align:center;padding:40px;color:var(--muted);">
           Nincs adat a megadott időszakra.
         </div>
@@ -1550,6 +1574,7 @@ async function loadSensorChart() {
     }
   });
 
+  _sensorSingleDay = labels.length > 0 && labels.every(l => l.slice(0, 10) === labels[0].slice(0, 10));
   const totalPoints = labels.length;
   status.textContent = `${totalPoints} mérési pont, ${sensors.length} szenzor`;
 
@@ -1559,7 +1584,8 @@ async function loadSensorChart() {
     data: { labels, datasets },
     options: {
       responsive: true,
-      maintainAspectRatio: true,
+      maintainAspectRatio: !_sensorFs,
+      aspectRatio: window.innerWidth < 600 ? 1.1 : 2,
       interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: { labels: { color: '#cdd6f4', font: { size: 11 } } },
@@ -1567,7 +1593,10 @@ async function loadSensorChart() {
       },
       scales: {
         x: {
-          ticks: { color: '#6c7086', maxRotation: 45, font: { size: 10 } },
+          ticks: {
+            color: '#6c7086', maxRotation: 0, autoSkipPadding: 14, font: { size: 10 },
+            callback(value) { return _shortTs(this.getLabelForValue(value)); },
+          },
           grid:  { color: '#313244' },
         },
         y: {
@@ -1577,7 +1606,91 @@ async function loadSensorChart() {
       },
     },
   });
+  _applySensorChartLayout();
 }
+
+// ── Chart fullscreen (phone-friendly) ────────────────────────────────────────
+// A CSS overlay works everywhere (incl. iOS, where the Fullscreen API is not
+// available for arbitrary elements); where the browser allows it we also go
+// into native fullscreen and try to lock landscape.
+let _sensorFs = false;
+let _sensorSingleDay = true;
+
+// "2026-10-07 01:40:53" -> "01:40" (single day) or "10-07 01:40"; the tooltip keeps the full stamp.
+function _shortTs(l) { return _sensorSingleDay ? l.slice(11, 16) : l.slice(5, 16); }
+
+// Phones (and fullscreen) get a compact, tappable chip legend instead of Chart.js's wide one.
+function _useChips() { return _sensorFs || window.innerWidth < 600; }
+
+function _renderFsLegend() {
+  const box = document.getElementById('chart-fs-legend');
+  if (!box) return;
+  document.getElementById('sensor-chart-wrap').classList.toggle('chips', _useChips());
+  if (!_useChips() || !_sensorChart) { box.innerHTML = ''; return; }
+  box.innerHTML = '';
+  _sensorChart.data.datasets.forEach((ds, i) => {
+    const chip = document.createElement('span');
+    chip.className = 'chart-chip' + (_sensorChart.isDatasetVisible(i) ? '' : ' off');
+    chip.innerHTML = `<i style="background:${ds.borderColor}"></i>${escHtml(ds.label)}`;
+    chip.onclick = () => {
+      _sensorChart.setDatasetVisibility(i, !_sensorChart.isDatasetVisible(i));
+      _sensorChart.update();
+      chip.classList.toggle('off', !_sensorChart.isDatasetVisible(i));
+    };
+    box.appendChild(chip);
+  });
+}
+
+function _applySensorChartLayout() {
+  if (!_sensorChart) return;
+  const o  = _sensorChart.options;
+  const fs = _sensorFs;
+  o.maintainAspectRatio = !fs;
+  o.plugins.legend.display = !_useChips();
+  o.plugins.legend.position = 'top';
+  o.plugins.legend.labels.font = { size: fs ? 12 : 11 };
+  o.plugins.legend.labels.boxWidth = fs ? 12 : 40;
+  o.plugins.legend.labels.padding = fs ? 8 : 10;
+  o.plugins.tooltip.titleFont = { size: fs ? 13 : 12 };
+  o.plugins.tooltip.bodyFont  = { size: fs ? 13 : 12 };
+  o.scales.x.ticks.font = { size: fs ? 12 : 10 };
+  o.scales.y.ticks.font = { size: fs ? 12 : 12 };
+  _sensorChart.update();
+  _sensorChart.resize();
+  _renderFsLegend();
+}
+
+function _updateChartFsHint() {
+  const hint = document.getElementById('chart-fs-hint');
+  if (!hint) return;
+  const portrait = window.matchMedia && window.matchMedia('(orientation: portrait)').matches;
+  hint.textContent = (_sensorFs && portrait) ? '↻ Fordítsd vízszintesre a telefont a jobb olvashatóságért' : '';
+}
+
+async function toggleSensorFullscreen() {
+  const wrap = document.getElementById('sensor-chart-wrap');
+  _sensorFs = !_sensorFs;
+  wrap.classList.toggle('fs', _sensorFs);
+  document.body.style.overflow = _sensorFs ? 'hidden' : '';
+  if (_sensorFs) {
+    try { await (wrap.requestFullscreen || wrap.webkitRequestFullscreen)?.call(wrap); } catch (e) {}
+    try { await screen.orientation?.lock?.('landscape'); } catch (e) {}
+  } else {
+    try { screen.orientation?.unlock?.(); } catch (e) {}
+    if (document.fullscreenElement === wrap) { try { await document.exitFullscreen(); } catch (e) {} }
+  }
+  _updateChartFsHint();
+  _applySensorChartLayout();
+}
+
+// Left native fullscreen (back gesture / Esc): close the overlay as well.
+document.addEventListener('fullscreenchange', () => {
+  if (_sensorFs && !document.fullscreenElement) toggleSensorFullscreen();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && _sensorFs) toggleSensorFullscreen();
+});
+window.addEventListener('resize', () => { _updateChartFsHint(); _applySensorChartLayout(); });
 </script>
 </body>
 </html>
