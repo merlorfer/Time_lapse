@@ -88,7 +88,8 @@ button:disabled { opacity: .35; cursor: not-allowed; }
 .modal-btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
 
 /* ── Tabs ── */
-.tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--border); padding-bottom: 0; }
+.tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--border); padding-bottom: 0; overflow-x: auto; }
+.tabs .tab { white-space: nowrap; flex: 0 0 auto; }
 .tab { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; color: var(--muted); padding: 7px 14px; font-size: 13px; cursor: pointer; margin-bottom: -1px; }
 .tab.active { color: var(--text); border-bottom-color: var(--accent); }
 .tab-panel { display: none; }
@@ -103,6 +104,11 @@ button:disabled { opacity: .35; cursor: not-allowed; }
 .video-empty { color: var(--muted); font-size: 13px; padding: 12px 0; text-align: center; }
 .master-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: #1a2a1a; border: 1px solid #2d4a2d; border-radius: 8px; margin-bottom: 12px; }
 .master-row .vname { flex: 1; font-size: 13px; font-family: monospace; color: var(--green); }
+@media (max-width: 600px) {
+  .video-item, .master-row { flex-wrap: wrap; gap: 8px 10px; }
+  .video-item .vname, .master-row .vname { flex: 1 1 100%; overflow-wrap: anywhere; }
+  .video-item .vsize, .video-item .vdate, .master-row .vsize, .master-row .vdate { flex: 1 1 auto; min-width: 0; text-align: left; }
+}
 
 /* ── Spinner ── */
 .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,.2); border-top-color: #fff; border-radius: 50%; animation: spin .6s linear infinite; vertical-align: middle; margin-right: 6px; }
@@ -257,6 +263,7 @@ button:disabled { opacity: .35; cursor: not-allowed; }
     <div class="tabs" style="margin-top:12px">
       <button class="tab active" onclick="switchTab('archive')">📅 Napi videók</button>
       <button class="tab"        onclick="switchTab('renders')">🎬 Manuális renderek</button>
+      <button class="tab"        onclick="switchTab('backup');loadBackupDirs()">🗄 Archívum</button>
       <button class="tab"        onclick="switchTab('sensor');loadSensorChart()">📊 Szenzor adatok</button>
     </div>
     <div id="tab-archive" class="tab-panel active">
@@ -265,6 +272,29 @@ button:disabled { opacity: .35; cursor: not-allowed; }
     </div>
     <div id="tab-renders" class="tab-panel">
       <div id="video-list-renders" class="video-list"><div class="video-empty">Betöltés...</div></div>
+    </div>
+    <div id="tab-backup" class="tab-panel">
+      <div class="log-controls">
+        <label style="font-size:12px;color:var(--muted)">Backup mappa:</label>
+        <select id="backup-dir" onchange="loadBackupVideos()"></select>
+        <button class="btn-gray" style="padding:4px 10px;font-size:11px" onclick="loadBackupDirs()">↻</button>
+      </div>
+      <div id="backup-join-box" style="display:none;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;margin-bottom:12px">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:8px;font-weight:600">Videók összefűzése</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <select id="backup-join-start" onchange="updateJoinHint()"
+            style="flex:1;min-width:150px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px;font-size:13px"></select>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);white-space:nowrap">db:
+            <input type="number" id="backup-join-count" min="1" step="1" value="5" oninput="updateJoinHint()"
+              style="width:64px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px;font-size:13px">
+          </label>
+          <button class="btn-blue" id="backup-join-btn" onclick="startBackupJoin()">🔗 Összefűzés</button>
+        </div>
+        <div id="backup-join-hint" style="margin-top:6px;font-size:12px;color:var(--muted)"></div>
+        <div id="backup-join-status" style="margin-top:6px;font-size:12px;color:var(--muted);white-space:pre-wrap"></div>
+      </div>
+      <div id="backup-joined-wrap"></div>
+      <div id="video-list-backup" class="video-list"><div class="video-empty">Betöltés...</div></div>
     </div>
     <div id="tab-sensor" class="tab-panel">
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px;">
@@ -1467,6 +1497,136 @@ async function api(url, method = 'GET', body = null) {
 
 function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Backup archívum ────────────────────────────────────────────────────────
+let backupArchive = [];   // current dir's archive files (ascending by name)
+let backupJoinPoll = null;
+
+function escAttr(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;');
+}
+
+async function loadBackupDirs() {
+  const sel = document.getElementById('backup-dir');
+  const list = document.getElementById('video-list-backup');
+  const prev = sel.value;
+  let dirs = [];
+  try { dirs = (await api('/api/backup/dirs')).dirs || []; } catch (e) {}
+  if (!dirs.length) {
+    sel.innerHTML = '';
+    document.getElementById('backup-join-box').style.display = 'none';
+    document.getElementById('backup-joined-wrap').innerHTML = '';
+    list.innerHTML = '<div class="video-empty">Nincs backup mappa (backup/&lt;mappa&gt;/archive).</div>';
+    return;
+  }
+  sel.innerHTML = dirs.map(d => `<option value="${escAttr(d)}">${escHtml(d)}</option>`).join('');
+  if (dirs.includes(prev)) sel.value = prev;
+  await loadBackupVideos();
+  pollBackupJoin(true);
+}
+
+function backupPath(sub, name) {
+  const dir = document.getElementById('backup-dir').value;
+  return `backup/${encodeURIComponent(dir)}/${sub}/${encodeURIComponent(name)}`;
+}
+
+function backupPlay(btn) { playVideo(btn.dataset.path, btn.dataset.title); }
+
+function backupRowHtml(v, sub, extraClass) {
+  const path = backupPath(sub, v.name);
+  const dl = `${location.origin}/${path}`;
+  return `<div class="${extraClass}">
+    <div class="vname">${sub === 'joined' ? '🔗 ' : ''}${escHtml(v.name)}</div>
+    <div class="vsize">${fmtSize(v.size)}</div>
+    <div class="vdate">${fmtDate(v.mtime)}</div>
+    <button class="${sub === 'joined' ? 'btn-green' : 'btn-blue'}" style="padding:5px 12px;font-size:12px"
+      data-path="${escAttr(path)}" data-title="${escAttr(v.name)}" onclick="backupPlay(this)">▶</button>
+    <a href="${escAttr(dl)}" download="${escAttr(v.name)}" class="btn-gray"
+      style="padding:5px 12px;font-size:12px;text-decoration:none;border-radius:7px;border:1px solid var(--border)">⬇</a>
+  </div>`;
+}
+
+async function loadBackupVideos() {
+  const dir = document.getElementById('backup-dir').value;
+  const list = document.getElementById('video-list-backup');
+  const joinedWrap = document.getElementById('backup-joined-wrap');
+  if (!dir) return;
+  let d;
+  try { d = await api('/api/backup/videos?dir=' + encodeURIComponent(dir)); }
+  catch (e) { list.innerHTML = '<div class="video-empty">Hiba a betöltéskor.</div>'; return; }
+
+  backupArchive = d.archive || [];
+  const startSel = document.getElementById('backup-join-start');
+  const prevStart = startSel.value;
+  startSel.innerHTML = backupArchive.map(v => `<option value="${escAttr(v.name)}">${escHtml(v.name)}</option>`).join('');
+  if (backupArchive.some(v => v.name === prevStart)) startSel.value = prevStart;
+  document.getElementById('backup-join-box').style.display = backupArchive.length ? 'block' : 'none';
+  updateJoinHint();
+
+  joinedWrap.innerHTML = (d.joined || []).map(v => backupRowHtml(v, 'joined', 'master-row')).join('');
+  list.innerHTML = backupArchive.length
+    ? backupArchive.map(v => backupRowHtml(v, 'archive', 'video-item')).join('')
+    : '<div class="video-empty">Az archive mappa üres.</div>';
+}
+
+function updateJoinHint() {
+  const hint = document.getElementById('backup-join-hint');
+  const start = document.getElementById('backup-join-start').value;
+  const count = parseInt(document.getElementById('backup-join-count').value, 10);
+  const idx = backupArchive.findIndex(v => v.name === start);
+  if (idx < 0 || !(count >= 1)) { hint.textContent = ''; return; }
+  const chosen = backupArchive.slice(idx, idx + count);
+  const total = chosen.reduce((a, v) => a + v.size, 0);
+  let t = `${chosen[0].name} → ${chosen[chosen.length - 1].name}  (${chosen.length} db, ${fmtSize(total)})`;
+  if (chosen.length < count) t += `  – a kért ${count} helyett csak ${chosen.length} fájl van hátra`;
+  hint.textContent = t;
+}
+
+async function startBackupJoin() {
+  const dir = document.getElementById('backup-dir').value;
+  const start = document.getElementById('backup-join-start').value;
+  const count = parseInt(document.getElementById('backup-join-count').value, 10);
+  const status = document.getElementById('backup-join-status');
+  if (!dir || !start || !(count >= 1)) {
+    status.style.color = 'var(--red)';
+    status.textContent = 'Válassz fájlt és adj meg egy nullánál nagyobb egész számot.';
+    return;
+  }
+  status.style.color = 'var(--muted)';
+  status.textContent = 'Indítás...';
+  try {
+    const r = await api('/api/backup/join', 'POST', { dir, start, count });
+    status.style.color = r.ok ? 'var(--muted)' : 'var(--red)';
+    status.textContent = r.message;
+    if (r.ok) pollBackupJoin(false);
+  } catch (e) {
+    status.style.color = 'var(--red)';
+    status.textContent = 'Hálózati hiba';
+  }
+}
+
+async function pollBackupJoin(silentIfIdle) {
+  clearTimeout(backupJoinPoll);
+  const status = document.getElementById('backup-join-status');
+  const btn = document.getElementById('backup-join-btn');
+  let j;
+  try { j = await api('/api/backup/join-status'); } catch (e) { return; }
+  if (j.state === 'running') {
+    btn.disabled = true;
+    status.style.color = 'var(--muted)';
+    const secs = j.started ? Math.round(Date.now() / 1000 - j.started) : 0;
+    status.innerHTML = '<span class="spinner"></span>' + escHtml(j.message) + ` (${secs} mp)`;
+    backupJoinPoll = setTimeout(() => pollBackupJoin(false), 2000);
+    return;
+  }
+  btn.disabled = false;
+  if (j.state === 'done' || j.state === 'error') {
+    if (silentIfIdle) return;   // on tab open only a running job is shown, not an old result
+    status.style.color = j.state === 'done' ? 'var(--green)' : 'var(--red)';
+    status.textContent = j.message + (j.state === 'error' && j.output ? '\n' + j.output : '');
+    if (j.state === 'done') await loadBackupVideos();
+  }
 }
 </script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>

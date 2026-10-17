@@ -7,6 +7,11 @@ Port: 8082
 import csv
 import http.client
 import http.server
+import mimetypes
+import shutil
+import tempfile
+import time
+import urllib.parse
 import ipaddress
 import json
 import subprocess
@@ -406,6 +411,182 @@ def get_videos() -> dict:
         "master":  master,
     }
 
+# ── Backup archive browser ────────────────────────────────────────────────────
+# <video_base>/backup/<dir>/archive/*.mp4  (browse / play / download)
+# <video_base>/backup/<dir>/joined/*.mp4   (concatenations made from the archive)
+BACKUP_NAME      = "backup"
+BACKUP_ARCHIVE   = "archive"
+BACKUP_JOINED    = "joined"
+_VIDEO_EXTS      = (".mp4", ".mkv", ".mov", ".avi", ".webm")
+
+def backup_base() -> str:
+    return os.path.join(get_video_base(), BACKUP_NAME)
+
+def list_backup_dirs() -> list:
+    """Backup sub-directories that contain an archive folder, newest name first."""
+    base = backup_base()
+    try:
+        names = [d for d in os.listdir(base)
+                 if os.path.isdir(os.path.join(base, d, BACKUP_ARCHIVE))]
+    except OSError:
+        return []
+    return sorted(names, reverse=True)
+
+def resolve_backup_dir(name: str):
+    """Absolute path of a backup dir, only if `name` is an actual entry returned
+    by list_backup_dirs() -- never builds a path from raw request input."""
+    return os.path.join(backup_base(), name) if name in list_backup_dirs() else None
+
+def _list_videos_in(directory: str, newest_first: bool) -> list:
+    out = []
+    try:
+        for name in os.listdir(directory):
+            if not name.lower().endswith(_VIDEO_EXTS) or name.startswith("."):
+                continue
+            path = os.path.join(directory, name)
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            if os.path.isfile(path):
+                out.append({"name": name, "size": st.st_size, "mtime": int(st.st_mtime)})
+    except OSError:
+        pass
+    if newest_first:
+        out.sort(key=lambda v: v["mtime"], reverse=True)
+    else:
+        out.sort(key=lambda v: v["name"])
+    return out
+
+def get_backup_videos(dirname: str):
+    root = resolve_backup_dir(dirname)
+    if root is None:
+        return None
+    return {
+        "archive": _list_videos_in(os.path.join(root, BACKUP_ARCHIVE), newest_first=False),
+        "joined":  _list_videos_in(os.path.join(root, BACKUP_JOINED),  newest_first=True),
+    }
+
+def resolve_backup_file(url_path: str):
+    """/backup/<dir>/<archive|joined>/<file> -> absolute path or None. Every
+    component must match an existing directory entry (no traversal possible)."""
+    parts = [urllib.parse.unquote(p) for p in url_path.lstrip("/").split("/")]
+    if len(parts) != 4 or parts[0] != BACKUP_NAME or parts[2] not in (BACKUP_ARCHIVE, BACKUP_JOINED):
+        return None
+    root = resolve_backup_dir(parts[1])
+    if root is None:
+        return None
+    folder = os.path.join(root, parts[2])
+    try:
+        if parts[3] not in os.listdir(folder):
+            return None
+    except OSError:
+        return None
+    return os.path.join(folder, parts[3])
+
+def fmt_bytes(n: float) -> str:
+    return f"{n / 1073741824:.1f} GB" if n > 1073741824 else f"{n / 1048576:.0f} MB"
+
+# Background join job (a long ffmpeg copy must not hold an HTTP request open).
+_join_lock = threading.Lock()
+_join_job  = {"state": "idle", "message": "", "output": "", "started": 0, "finished": 0}
+
+def _set_join(**kw):
+    with _join_lock:
+        _join_job.update(kw)
+
+def join_status() -> dict:
+    with _join_lock:
+        return dict(_join_job)
+
+def start_backup_join(dirname: str, start: str, count):
+    """Validate, then launch the concat in a thread. Returns (ok, message)."""
+    root = resolve_backup_dir(dirname)
+    if root is None:
+        return False, "Ismeretlen backup mappa"
+    try:
+        count = int(count)
+    except (ValueError, TypeError):
+        return False, "A darabszám nem szám"
+    if count < 1:
+        return False, "A darabszám legyen nullánál nagyobb egész szám"
+
+    archive = os.path.join(root, BACKUP_ARCHIVE)
+    ext = os.path.splitext(start)[1].lower()
+    files = [v["name"] for v in _list_videos_in(archive, newest_first=False)
+             if os.path.splitext(v["name"])[1].lower() == ext]
+    if start not in files:
+        return False, "A kiválasztott fájl nem található az archívumban"
+    idx = files.index(start)
+    chosen = files[idx: idx + count]
+
+    total = sum(os.path.getsize(os.path.join(archive, n)) for n in chosen)
+    joined_dir = os.path.join(root, BACKUP_JOINED)
+    try:
+        os.makedirs(joined_dir, exist_ok=True)
+        free = shutil.disk_usage(joined_dir).free
+    except OSError as e:
+        return False, f"A joined mappa nem hozható létre: {e}"
+    if free < total * 1.1 + 50 * 1024 * 1024:
+        return False, f"Nincs elég szabad hely ({fmt_bytes(free)} szabad, kb. {fmt_bytes(total)} kell)"
+
+    first, last = os.path.splitext(chosen[0])[0], os.path.splitext(chosen[-1])[0]
+    out_name = f"{first}_{last}{ext}" if len(chosen) > 1 else f"{first}{ext}"
+    out_path = os.path.join(joined_dir, out_name)
+
+    with _join_lock:
+        if _join_job["state"] == "running":
+            return False, "Már fut egy összefűzés, várd meg a végét"
+        _join_job.update(state="running", output="", started=time.time(), finished=0,
+                         message=f"Összefűzés folyamatban: {len(chosen)} videó → {out_name}")
+    threading.Thread(target=_run_join, daemon=True,
+                     args=(archive, chosen, out_path, out_name, count)).start()
+    note = ""
+    if len(chosen) < count:
+        note = f" (a kért {count} helyett csak {len(chosen)} fájl van a kiválasztottól kezdve)"
+    return True, f"Összefűzés elindult: {len(chosen)} videó → {out_name}{note}"
+
+def _run_join(archive: str, names: list, out_path: str, out_name: str, requested: int):
+    list_file = None
+    tmp_out = os.path.join(os.path.dirname(out_path), ".tmp_" + out_name)
+    fmt = {".mkv": "matroska", ".mov": "mov", ".avi": "avi", ".webm": "webm"}.get(
+        os.path.splitext(out_name)[1].lower(), "mp4")
+    try:
+        fd, list_file = tempfile.mkstemp(suffix=".txt", prefix="join_")
+        with os.fdopen(fd, "w") as f:
+            for n in names:
+                safe = os.path.join(archive, n).replace("'", "'\\''")
+                f.write(f"file '{safe}'\n")
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_file,
+             "-c", "copy", "-f", fmt, tmp_out],
+            capture_output=True, text=True, errors="replace", timeout=3600)
+        if r.returncode != 0:
+            tail = "\n".join(r.stderr.strip().splitlines()[-6:])
+            _set_join(state="error", finished=time.time(),
+                      message="Az összefűzés sikertelen (ffmpeg)", output=tail)
+            return
+        os.replace(tmp_out, out_path)
+        size = os.path.getsize(out_path)
+        extra = f" (a kért {requested} helyett {len(names)} fájl)" if len(names) < requested else ""
+        _set_join(state="done", finished=time.time(), output=out_name,
+                  message=f"Kész: {out_name} ({len(names)} videó, {fmt_bytes(size)}){extra}")
+    except subprocess.TimeoutExpired:
+        _set_join(state="error", finished=time.time(), message="Időtúllépés (1 óra)", output="")
+    except Exception as e:
+        _set_join(state="error", finished=time.time(), message=f"Hiba: {e}", output="")
+    finally:
+        if list_file:
+            try:
+                os.unlink(list_file)
+            except OSError:
+                pass
+        if os.path.exists(tmp_out):
+            try:
+                os.unlink(tmp_out)
+            except OSError:
+                pass
+
 # ── Sensor data helpers ───────────────────────────────────────────────────────
 
 def get_sensor_archive_dir() -> str:
@@ -599,7 +780,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._serve_units()
         elif path == "/api/units/scan":
             self._send_json({"devices": scan_network()})
-        elif path.startswith("/archive/") or path.startswith("/renders/") or path == "/master.mp4":
+        elif path == "/api/backup/dirs":
+            self._send_json({"dirs": list_backup_dirs()})
+        elif path == "/api/backup/videos":
+            qs = parse_qs(parsed.query)
+            data = get_backup_videos(qs.get("dir", [""])[0])
+            self._send_json(data if data is not None
+                            else {"archive": [], "joined": [], "error": "ismeretlen mappa"})
+        elif path == "/api/backup/join-status":
+            self._send_json(join_status())
+        elif path.startswith("/archive/") or path.startswith("/renders/") or path == "/master.mp4" \
+                or path.startswith("/backup/"):
             self._serve_video(path)
         else:
             self.send_error(404)
@@ -629,6 +820,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._add_unit(body)
         elif parsed.path == "/api/units/remove":
             self._remove_unit(body)
+        elif parsed.path == "/api/backup/join":
+            ok, msg = start_backup_join(str(body.get("dir", "")), str(body.get("start", "")),
+                                        body.get("count", 0))
+            self._send_json({"ok": ok, "message": msg})
         elif parsed.path == "/api/serial-enabled":
             self._set_serial_enabled(body)
         elif parsed.path == "/api/sensor-config":
@@ -655,6 +850,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # Map URL path to filesystem path safely
         if url_path == "/master.mp4":
             filepath = os.path.join(video_base, "master.mp4")
+        elif url_path.startswith("/backup/"):
+            filepath = resolve_backup_file(url_path)
+            if filepath is None:
+                self.send_error(404)
+                return
         else:
             # /archive/name.mp4 or /renders/name.mp4
             parts = url_path.lstrip("/").split("/", 1)
@@ -672,6 +872,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_error(404)
             return
 
+        mime = mimetypes.guess_type(filepath)[0] or "video/mp4"
         file_size = os.path.getsize(filepath)
         range_header = self.headers.get("Range")
 
@@ -687,7 +888,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             end = min(end, file_size - 1)
             length = end - start + 1
             self.send_response(206)
-            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Type", mime)
             self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
             self.send_header("Content-Length", length)
             self.send_header("Accept-Ranges", "bytes")
@@ -703,7 +904,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     remaining -= len(chunk)
         else:
             self.send_response(200)
-            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Type", mime)
             self.send_header("Content-Length", file_size)
             self.send_header("Accept-Ranges", "bytes")
             self.end_headers()
