@@ -13,7 +13,8 @@ USB_MOUNT="/mnt/timelapse"
 SD_BASE="/home/orangepi/timelapse/videos"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" | tee -a "$LOG"; }
-send_alert() { python3 "${SCRIPT_DIR}/send_alert.py" "$1" "$2" >> "$LOG" 2>&1 || true; }
+# send_alert <esemény_id> "Tárgy" "Üzenet" – sorba állítja; az email_dispatcher küldi el, ha van internet
+send_alert() { python3 "${SCRIPT_DIR}/send_alert.py" "$1" "$2" "$3" >> "$LOG" 2>&1 || true; }
 
 mkdir -p "$(dirname "$LOG")"
 
@@ -32,6 +33,22 @@ except Exception:
 "
 }
 
+# ── Indulás értesítés: minden bootnál (a levelet csak akkor küldi ki az email_dispatcher, ha van internet) ─
+BOOT_REASON="normál indulás"
+if [ -f "$PRE_REBOOT_STATE" ]; then
+    case "$(read_json_field "$PRE_REBOOT_STATE" reboot_reason)" in
+        shutdown) BOOT_REASON="biztonságos leállítás után" ;;
+        *)        BOOT_REASON="tervezett újraindítás után" ;;
+    esac
+elif [ -f "$LAST_SESSION" ]; then
+    case "$(read_json_field "$LAST_SESSION" active)" in
+        True|true) BOOT_REASON="váratlan leállás (áramszünet?) után" ;;
+    esac
+fi
+log "Indulás oka: ${BOOT_REASON}"
+send_alert boot "Rendszer elindult" \
+    "Az Orange Pi elindult (${BOOT_REASON}). Rendszer: $(hostname)"
+
 # ── Forrás meghatározása: tervezett reboot vagy áramszünet utáni visszaállítás ─
 STATE_FILE=""
 STATE_SOURCE=""
@@ -46,7 +63,7 @@ elif [ -f "$LAST_SESSION" ]; then
         STATE_FILE="$LAST_SESSION"
         STATE_SOURCE="áramszünet utáni visszaállítás (last_session.json)"
         log "Áramszünet detektálva – last_session.json alapján visszaállítás"
-        send_alert "Timelapse áramszünet után visszaállva" \
+        send_alert power_restored "Timelapse áramszünet után visszaállva" \
             "Áramszünet vagy váratlan leállás után a timelapse automatikusan visszaállt a mentett paraméterekkel. Rendszer: $(hostname)"
     else
         log "Nincs visszaállítani való (last_session.json active=false) – normál boot"
@@ -90,7 +107,7 @@ if [ "$USB_OK" = true ]; then
 else
     RESTORE_STORAGE="$SD_BASE"
     log "USB nem elérhető – SD fallback: $RESTORE_STORAGE"
-    send_alert "Timelapse USB hiba boot után" \
+    send_alert usb_boot_error "Timelapse USB hiba boot után" \
         "Boot után az USB meghajtó ($USB_MOUNT) nem elérhető. A timelapse SD kártyán folytatódik ($RESTORE_STORAGE). Rendszer: $(hostname)"
 fi
 
@@ -130,7 +147,7 @@ if [ "$TL_ACTIVE" = "True" ] || [ "$TL_ACTIVE" = "true" ]; then
         log "Timelapse sikeresen újraindítva"
     else
         log "ERROR: timelapse újraindítás sikertelen"
-        send_alert "Timelapse újraindítás hiba" \
+        send_alert restart_failed "Timelapse újraindítás hiba" \
             "Boot után a timelapse automatikus újraindítása sikertelen. Kézi beavatkozás szükséges. Rendszer: $(hostname)"
     fi
 else

@@ -458,9 +458,28 @@ button:disabled { opacity: .35; cursor: not-allowed; }
         <div class="btn-grid">
           <button class="btn-blue" onclick="sendTestEmail()">📧 Teszt email küldés</button>
         </div>
+
+        <div style="font-size:12px;color:var(--muted);margin:16px 0 6px;font-weight:600">Milyen eseményről küldjön email?</div>
+        <div id="email-events" style="display:flex;flex-direction:column;gap:6px">
+          <span style="font-size:12px;color:var(--muted);font-style:italic">Betöltés...</span>
+        </div>
+        <div style="margin-top:6px;font-size:11px;color:var(--muted)">Ha nincs internet, az események sorban várnak, és amint van kapcsolat, elmennek (az esemény eredeti időpontjával).</div>
+
         <div style="display:flex;gap:10px;margin-top:14px;align-items:center">
           <button class="btn-green" onclick="saveSystemConfig()">💾 Beállítások mentése</button>
           <span class="cfg-save-status" style="font-size:12px;color:var(--muted)"></span>
+        </div>
+
+        <div style="margin-top:18px;padding-top:12px;border-top:1px solid var(--border)">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+            <span style="font-size:12px;color:var(--muted);font-weight:600">Email napló</span>
+            <span id="email-log-status" style="font-size:12px;color:var(--muted);flex:1"></span>
+            <button class="btn-gray" style="padding:3px 10px;font-size:11px" onclick="loadEmailLog()">↻</button>
+            <button class="btn-red" style="padding:3px 10px;font-size:11px" onclick="clearEmailLog()">🗑 Napló törlése</button>
+          </div>
+          <div id="email-log" style="max-height:240px;overflow-y:auto;display:flex;flex-direction:column;gap:6px">
+            <span style="font-size:12px;color:var(--muted);font-style:italic">Betöltés...</span>
+          </div>
         </div>
       </div>
     </div>
@@ -1144,6 +1163,7 @@ function toggleSimplePanel(name) {
   const open = panel.style.display === 'none';
   panel.style.display = open ? 'block' : 'none';
   arrow.textContent = open ? '▼' : '▶';
+  if (name === 'email') onEmailPanelToggle(open);
 }
 
 async function triggerSafeShutdown() {
@@ -1165,6 +1185,89 @@ async function triggerSafeShutdown() {
     res.textContent = 'Hálózati hiba';
     btn.disabled = false;
   }
+}
+
+// ── Email események + napló ────────────────────────────────────────────────
+let emailLogTimer = null;
+
+async function loadEmailEvents() {
+  const box = document.getElementById('email-events');
+  try {
+    const d = await api('/api/email-events');
+    box.innerHTML = (d.events || []).map(e =>
+      `<label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer">
+         <input type="checkbox" class="email-event-chk" data-id="${escAttr(e.id)}" ${e.enabled ? 'checked' : ''} style="width:auto">
+         ${escHtml(e.label)}
+       </label>`).join('');
+  } catch (e) {
+    box.innerHTML = '<span style="color:var(--red);font-size:12px">Hiba a betöltéskor.</span>';
+  }
+}
+
+function collectEmailEvents() {
+  const out = {};
+  document.querySelectorAll('.email-event-chk').forEach(c => { out[c.dataset.id] = c.checked; });
+  return out;
+}
+
+function onEmailPanelToggle(open) {
+  clearInterval(emailLogTimer);
+  if (open) {
+    loadEmailEvents();
+    loadEmailLog();
+    emailLogTimer = setInterval(loadEmailLog, 15000);
+  }
+}
+
+function fmtEmailTime(ts) {
+  return new Date(ts * 1000).toLocaleString('hu-HU', {year:'numeric',month:'2-digit',day:'2-digit',
+                                                       hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+
+async function loadEmailLog() {
+  const list = document.getElementById('email-log');
+  const stEl = document.getElementById('email-log-status');
+  let d;
+  try { d = await api('/api/email-log'); } catch (e) { return; }
+  const st = d.status || {};
+  const net = st.online === true ? '<span style="color:var(--green)">✓ SMTP szerver elérhető</span>'
+            : st.online === false ? '<span style="color:var(--red)">✗ nincs internet / SMTP nem elérhető</span>'
+            : '<span>– (email kikapcsolva)</span>';
+  stEl.innerHTML = net + (st.pending ? ` · várakozó: <b>${st.pending}</b>` : '') +
+    (st.alive ? '' : ' · <span style="color:var(--red)">a kézbesítő szolgáltatás nem fut</span>');
+
+  if (!d.entries.length) {
+    list.innerHTML = '<span style="font-size:12px;color:var(--muted);font-style:italic">Még nem volt emailt kiváltó esemény.</span>';
+    return;
+  }
+  list.innerHTML = d.entries.map(e => {
+    let badge, color;
+    if (e.status === 'sent') {
+      const late = e.sent_ts && e.sent_ts - e.ts > 120;
+      badge = (late ? '✓ késve elküldve ' : '✓ elküldve ') + fmtEmailTime(e.sent_ts).slice(-8, -3);
+      color = 'var(--green)';
+    } else if (e.status === 'pending') {
+      badge = st.online === false ? '⏳ várakozik (nincs internet)' : '⏳ várakozik';
+      color = 'var(--yellow)';
+    } else if (e.status === 'expired') { badge = 'lejárt'; color = 'var(--muted)'; }
+    else { badge = '✗ hiba'; color = 'var(--red)'; }
+    const err = e.last_error && e.status !== 'sent'
+      ? `<div style="font-size:11px;color:var(--muted);word-break:break-word">${escHtml(e.last_error)}${e.attempts ? ` (${e.attempts}. próba)` : ''}</div>` : '';
+    return `<div style="padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px">
+      <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">
+        <span style="font-size:11px;color:var(--muted);font-family:monospace">${escHtml(fmtEmailTime(e.ts))}</span>
+        <span style="font-size:12px;color:var(--text);flex:1;min-width:140px">${escHtml(e.label)}</span>
+        <span style="font-size:11px;color:${color};white-space:nowrap">${badge}</span>
+      </div>${err}</div>`;
+  }).join('');
+}
+
+async function clearEmailLog() {
+  if (!confirm('Törlöd az email naplót?\n\nA még el nem küldött (várakozó) értesítések megmaradnak, és továbbra is kimennek.')) return;
+  try {
+    await api('/api/email-log/clear', 'POST', {});
+  } catch (e) {}
+  loadEmailLog();
 }
 
 function toggleUnitsPanel() {
@@ -1433,6 +1536,7 @@ async function saveSystemConfig() {
     reboot_time:         document.getElementById('cfg-reboot-time').value,
     master_days_enabled: document.getElementById('master-days-enabled').checked,
     master_days:         parseInt(document.getElementById('master-days-input').value) || 7,
+    email_events:        collectEmailEvents(),
   };
   const pw = document.getElementById('cfg-smtp-password').value;
   if (pw) body.smtp_password = pw;

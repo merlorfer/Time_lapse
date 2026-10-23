@@ -87,6 +87,16 @@ cat > "$PRE_REBOOT_STATE" <<EOF
 EOF
 log "Pre-reboot state mentve → $PRE_REBOOT_STATE (timelapse_active=$TL_ACTIVE)"
 
+# Értesítés a leállítás/újraindítás előtt: ha van internet, kimegy még előtte (max. 20 mp várakozás),
+# egyébként a sorban marad, és a következő bootnál, az eredeti időponttal megy ki.
+if [ "$ACTION" = "poweroff" ]; then
+    python3 "$SCRIPT_DIR/send_alert.py" --wait 20 reboot_shutdown "Leállítás indul" \
+        "Biztonságos leállítás indult, az Orange Pi a mentés után leáll. Rendszer: $(hostname)" >> "$LOG" 2>&1 || true
+else
+    python3 "$SCRIPT_DIR/send_alert.py" --wait 20 reboot_shutdown "Újraindítás indul" \
+        "Biztonságos újraindítás indult, az Orange Pi a mentés után újraindul. Rendszer: $(hostname)" >> "$LOG" 2>&1 || true
+fi
+
 if [ "$ACTION" = "poweroff" ]; then
     log "=== Mentés kész, leállítás... ==="
     sync

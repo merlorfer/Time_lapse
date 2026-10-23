@@ -9,6 +9,7 @@ import http.client
 import http.server
 import mimetypes
 import shutil
+import sys
 import tempfile
 import time
 import urllib.parse
@@ -23,6 +24,9 @@ from datetime import date, timedelta
 from urllib.parse import urlparse, parse_qs
 
 SCRIPT_DIR        = "/home/orangepi/timelapse/scripts"
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
+sys.path.insert(0, SCRIPT_DIR)
+import alert_lib  # shared with send_alert.py / email_dispatcher.py
 LOG_DIR           = "/home/orangepi/timelapse/logs"
 FRAME_DIR         = "/tmp/timelapse_frames"
 SENSOR_RAM_DIR    = "/tmp/sensor_data"
@@ -61,6 +65,7 @@ _CONFIG_DEFAULTS = {
     "units":               [],
     "serial_enabled":      True,
     "sensor_sources":      {},
+    "email_events":        {},     # event id -> bool; missing = enabled
 }
 
 # ── Sensor sources (UART via esp32_proxy on :8083 + WiFi gateway units) ───────
@@ -780,6 +785,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._serve_units()
         elif path == "/api/units/scan":
             self._send_json({"devices": scan_network()})
+        elif path == "/api/email-events":
+            self._serve_email_events()
+        elif path == "/api/email-log":
+            self._serve_email_log()
         elif path == "/api/backup/dirs":
             self._send_json({"dirs": list_backup_dirs()})
         elif path == "/api/backup/videos":
@@ -820,6 +829,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._add_unit(body)
         elif parsed.path == "/api/units/remove":
             self._remove_unit(body)
+        elif parsed.path == "/api/email-log/clear":
+            removed, kept = alert_lib.clear_finished()
+            self._send_json({"ok": True, "removed": removed, "kept_pending": kept})
         elif parsed.path == "/api/backup/join":
             ok, msg = start_backup_join(str(body.get("dir", "")), str(body.get("start", "")),
                                         body.get("count", 0))
@@ -1073,6 +1085,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             cfg["smtp_user"] = str(body["smtp_user"]).strip()[:128]
         if "smtp_password" in body and body["smtp_password"]:
             cfg["smtp_password"] = str(body["smtp_password"])
+        if isinstance(body.get("email_events"), dict):
+            cfg["email_events"] = {k: bool(v) for k, v in body["email_events"].items()
+                                   if k in alert_lib.EVENT_IDS}
         if "reboot_enabled" in body:
             cfg["reboot_enabled"] = bool(body["reboot_enabled"])
         if "reboot_interval_days" in body:
@@ -1252,25 +1267,41 @@ class Handler(http.server.BaseHTTPRequestHandler):
         restart_unit_forward()
         self._send_json({"ok": True})
 
-    def _send_test_email(self):
-        script_path = os.path.join(SCRIPT_DIR, "send_alert.py")
-        if not os.path.isfile(script_path):
-            self._send_json({"ok": False, "output": "send_alert.py nem található"})
-            return
+    def _serve_email_events(self):
+        cfg = load_system_config()
+        self._send_json({"events": [
+            {"id": eid, "label": label, "enabled": alert_lib.event_enabled(cfg, eid)}
+            for eid, label in alert_lib.EVENTS]})
+
+    def _serve_email_log(self):
+        entries = sorted(alert_lib.read_entries(), key=lambda e: e.get("ts", 0), reverse=True)[:100]
+        out = [{
+            "id": e["id"], "event": e["event"],
+            "label": alert_lib.EVENT_LABELS.get(e["event"], e["event"]),
+            "subject": e.get("subject", ""), "ts": e.get("ts", 0),
+            "status": e.get("status", ""), "attempts": e.get("attempts", 0),
+            "last_error": e.get("last_error", ""), "sent_ts": e.get("sent_ts", 0),
+        } for e in entries]
+        status = {"online": None, "pending": 0, "alive": False}
         try:
-            result = subprocess.run(
-                ["python3", script_path, "Teszt értesítés",
-                 f"Ez egy teszt email a timelapse rendszertől ({os.uname().nodename})."],
-                capture_output=True, text=True, timeout=60
-            )
-            self._send_json({
-                "ok":     result.returncode == 0,
-                "output": (result.stdout + result.stderr).strip() or "Elküldve",
-            })
-        except subprocess.TimeoutExpired:
-            self._send_json({"ok": False, "output": "Timeout (60 mp)"})
-        except Exception as e:
-            self._send_json({"ok": False, "output": str(e)})
+            with open(alert_lib.STATUS_FILE) as f:
+                st = json.load(f)
+            status.update(online=st.get("online"), pending=st.get("pending", 0),
+                          alive=time.time() - st.get("checked", 0) < 60)
+        except Exception:
+            pass
+        status["pending"] = sum(1 for e in out if e["status"] == "pending")
+        self._send_json({"entries": out, "status": status})
+
+    def _send_test_email(self):
+        # Explicit user action: send immediately (regardless of the enable switch)
+        # so the result is visible at once, and record it in the email log.
+        cfg = load_system_config()
+        subject = "Teszt értesítés"
+        ok, err = alert_lib.send_now(
+            subject, f"Ez egy teszt email a timelapse rendszertől ({os.uname().nodename}).", cfg)
+        alert_lib.record_direct("test", subject, ok, err)
+        self._send_json({"ok": ok, "output": "Elküldve" if ok else err})
 
     def _run_script(self, script: str, params: dict):
         if script not in ALLOWED_SCRIPTS:

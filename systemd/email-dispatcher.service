@@ -1,0 +1,16 @@
+[Unit]
+Description=Email event dispatcher (sends queued alerts once the internet is up)
+After=network.target
+
+[Service]
+Type=simple
+User=orangepi
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /home/orangepi/timelapse/scripts/email_dispatcher.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

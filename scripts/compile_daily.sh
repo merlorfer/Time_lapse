@@ -12,8 +12,9 @@ mkdir -p "$LOG_DIR"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
 
+# send_alert <esemény_id> "Tárgy" "Üzenet" – sorba állítja; az email_dispatcher küldi el, ha van internet
 send_alert() {
-    python3 "${SCRIPT_DIR}/send_alert.py" "$1" "$2" >> "$LOG" 2>&1 || true
+    python3 "${SCRIPT_DIR}/send_alert.py" "$1" "$2" "$3" >> "$LOG" 2>&1 || true
 }
 
 # SD fallback útvonalak (mindig elérhetők)
@@ -106,7 +107,7 @@ TMP_SIZE=$(stat -c%s "$TMP_DAILY" 2>/dev/null || echo 0)
 if [ "$TMP_SIZE" -lt 10240 ]; then
     log "ERROR: renderelt fájl túl kicsi (${TMP_SIZE} bájt), valószínűleg hibás"
     rm -f "$TMP_DAILY"
-    send_alert "Timelapse render hiba" \
+    send_alert render_error "Timelapse render hiba" \
         "A(z) ${YESTERDAY} napi videó renderelése sikertelen (fájlméret: ${TMP_SIZE} bájt). Rendszer: $(hostname)"
     exit 1
 fi
@@ -167,12 +168,12 @@ if [ "$USB_OK" = false ]; then
         log "SD mentés OK: $DEST_DAILY"
     else
         log "ERROR: SD mentés is sikertelen (méret: ${SD_SIZE})"
-        send_alert "Timelapse mentési hiba – KRITIKUS" \
+        send_alert save_critical "Timelapse mentési hiba – KRITIKUS" \
             "A(z) ${YESTERDAY} napi videó sem USB-re, sem SD kártyára nem mentható. Azonnali beavatkozás szükséges! Rendszer: $(hostname)"
         exit 1
     fi
 
-    send_alert "Timelapse USB hiba – SD fallback" \
+    send_alert usb_fallback "Timelapse USB hiba – SD fallback" \
         "A(z) ${YESTERDAY} napi videó USB helyett SD kártyára mentve (${DEST_DAILY}). Az USB meghajtó ellenőrzése szükséges. Rendszer: $(hostname)"
 fi
 

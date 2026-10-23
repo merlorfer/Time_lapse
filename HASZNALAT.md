@@ -221,6 +221,23 @@ journalctl -u sensor-collector -f
 
 ---
 
+## Email értesítések
+
+A *Rendszerbeállítások → 📧 Email értesítés* panelben (Gmail: `smtp.gmail.com`, 587, alkalmazásjelszó) kapcsolható be, és **eseményenként** választható, mikor küldjön emailt (alapból minden pipálva):
+rendszer elindult, újraindítás/leállítás indul, áramszünet utáni visszaállás, a felvétel újraindítása sikertelen, USB hiba boot után, napi videó render hiba, SD fallback, kritikus mentési hiba.
+
+**Internet nélkül:** az események nem vesznek el. A küldés előtt a rendszer sorba állítja őket (az SD kártyán, így áramszünetet is túlél), az `email-dispatcher` szolgáltatás pedig figyeli, mikortól érhető el az SMTP szerver, és csak akkor küldi el őket, régebbitől kezdve. A levélben az esemény *eredeti időpontja* szerepel, és ha késett, ez is látszik. Ez azért kell, mert áramszünet után a Pi gyorsabban elindul, mint a router. Az indulás utáni, még hálózat nélküli időbélyegeket a rendszer az óra szinkronizálása (NTP) után az uptime alapján javítja. 3 napig sikertelenül várakozó esemény "lejárt" állapotba kerül.
+
+Az **Email napló** (ugyanabban a panelben) minden emailt kiváltó eseményt mutat állapottal (várakozik / elküldve / hiba, a hiba okával) és az internet-állapottal. A *🗑 Napló törlése* gomb a befejezett bejegyzéseket törli, a még várakozókat nem.
+
+```bash
+systemctl status email-dispatcher
+journalctl -u email-dispatcher -f
+cat /home/orangepi/timelapse/logs/email_events.jsonl   # a napló nyers formában
+```
+
+---
+
 ## ESP32C6 firmware frissítése (távoli flash)
 
 Az ESP32C6 az Orange Pi USB portjára csatlakoztatva távolról is felflashelhető.
