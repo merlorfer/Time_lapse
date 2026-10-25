@@ -16,8 +16,19 @@ if [ ! -f /tmp/timelapse_active ]; then
 fi
 
 # --- Időablak ellenőrzés ---
+# Az éjfélen átnyúló ablakot is kezeli (pl. 22:00–06:00), és a 00:00 végpontot is
+# (08:00–00:00 = reggel 8-tól éjfélig). A HH:MM sztringek összehasonlíthatók.
+in_capture_window() {
+    local now="$1" start="$2" end="$3"
+    if [[ "$start" < "$end" || "$start" == "$end" ]]; then
+        [[ ! "$now" < "$start" && ! "$now" > "$end" ]]
+    else
+        [[ ! "$now" < "$start" || ! "$now" > "$end" ]]
+    fi
+}
+
 NOW=$(date +%H:%M)
-if [[ "$NOW" < "$CAPTURE_START" || "$NOW" > "$CAPTURE_END" ]]; then
+if ! in_capture_window "$NOW" "$CAPTURE_START" "$CAPTURE_END"; then
     exit 0
 fi
 
