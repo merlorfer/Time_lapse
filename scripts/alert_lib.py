@@ -39,6 +39,7 @@ EVENTS = [
     ("render_error",    "Napi videó render hiba"),
     ("usb_fallback",    "Napi videó SD kártyára mentve (USB hiba)"),
     ("save_critical",   "Napi videó mentési hiba – KRITIKUS"),
+    ("precapture_end_failed", "A képrögzítés utáni lezáró parancs sikertelen (a ventilátor kikapcsolva maradhatott)"),
 ]
 EVENT_IDS = {e[0] for e in EVENTS}
 EVENT_LABELS = dict(EVENTS)

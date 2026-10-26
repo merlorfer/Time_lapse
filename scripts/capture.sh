@@ -9,6 +9,7 @@ source "$(dirname "$0")/config.sh"
 
 LOG="${LOG_DIR}/capture.log"
 mkdir -p "$FRAME_DIR" "$LOG_DIR"
+START_TS=$(date +%s)   # a ciklus (cron) kezdete: ez számít a képek közti intervallumnak
 
 # --- Manuális indítás ellenőrzés (flag fájl) ---
 if [ ! -f /tmp/timelapse_active ]; then
@@ -32,6 +33,12 @@ if ! in_capture_window "$NOW" "$CAPTURE_START" "$CAPTURE_END"; then
     exit 0
 fi
 
+# --- Átfedés elleni zár ---
+# Az előzetes parancs + várakozás miatt egy futás hosszabb lehet egy percnél; a következő
+# percben induló futás addig vár (max. 20 mp), nehogy két rögzítés keveredjen.
+exec 9>/tmp/timelapse_capture.lock
+flock -w 20 9 || exit 0
+
 # --- Intervallum ellenőrzés ---
 LAST_CAPTURE_FILE="/tmp/timelapse_last_capture"
 if [ -f "$LAST_CAPTURE_FILE" ]; then
@@ -48,6 +55,15 @@ FREE_MB=$(df -m "$FRAME_DIR" | awk 'NR==2 {print $4}')
 if [ "$FREE_MB" -lt "$RAMDISK_MIN_FREE_MB" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') WARNING: Ramdisk low space (${FREE_MB}MB free), skipping capture" >> "$LOG"
     exit 1
+fi
+
+# --- Képrögzítés előtti parancs (pl. ventilátor leállítása), lezáró parancs a kép után ---
+# A lezáró parancs minden kilépési úton kimegy (EXIT trap); ha mégsem (áramszünet, kill),
+# a következő ciklus a tartósan tárolt függő parancsot küldi el először (lásd precapture.py).
+PRECAP="${SCRIPT_DIR}/precapture.py"
+if [ -f "$PRECAP" ]; then
+    trap 'python3 "$PRECAP" end >> "$LOG" 2>&1' EXIT
+    python3 "$PRECAP" start --max-lead "$CAPTURE_INTERVAL" >> "$LOG" 2>&1
 fi
 
 # --- Képrögzítés ---
@@ -90,5 +106,5 @@ ffmpeg -y -i "$OUTPUT" \
     -vf "drawtext=fontfile=${FONT_FILE}:text='${DISPLAY_TS}':fontsize=48:fontcolor=white:shadowcolor=black@0.8:shadowx=2:shadowy=2:x=20:y=15:box=1:boxcolor=black@0.6:boxborderw=12" \
     -f mjpeg "$TMP_OUTPUT" >> "$LOG" 2>&1 && mv "$TMP_OUTPUT" "$OUTPUT" || rm -f "$TMP_OUTPUT"
 
-date +%s > "$LAST_CAPTURE_FILE"
+echo "$START_TS" > "$LAST_CAPTURE_FILE"
 echo "$(date '+%Y-%m-%d %H:%M:%S') Captured: $OUTPUT [${METHOD}] (${FREE_MB}MB free)" >> "$LOG"

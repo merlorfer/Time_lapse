@@ -27,6 +27,7 @@ SCRIPT_DIR        = "/home/orangepi/timelapse/scripts"
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 sys.path.insert(0, SCRIPT_DIR)
 import alert_lib  # shared with send_alert.py / email_dispatcher.py
+import precapture  # command before each frame (shared with capture.sh)
 LOG_DIR           = "/home/orangepi/timelapse/logs"
 FRAME_DIR         = "/tmp/timelapse_frames"
 SENSOR_RAM_DIR    = "/tmp/sensor_data"
@@ -66,6 +67,7 @@ _CONFIG_DEFAULTS = {
     "serial_enabled":      True,
     "sensor_sources":      {},
     "email_events":        {},     # event id -> bool; missing = enabled
+    "precapture":          {"enabled": False, "lead_sec": 10, "target": "UART", "cmd": "", "end_cmd": ""},
 }
 
 # ── Sensor sources (UART via esp32_proxy on :8083 + WiFi gateway units) ───────
@@ -592,6 +594,32 @@ def _run_join(archive: str, names: list, out_path: str, out_name: str, requested
             except OSError:
                 pass
 
+# ── Pre-capture command (fan off before a frame, on after) ───────────────────
+def current_interval() -> int:
+    """Seconds between frames of the running (or last) timelapse session."""
+    try:
+        with open("/tmp/timelapse_session.conf") as f:
+            m = re.search(r'^CAPTURE_INTERVAL="?(\d+)"?', f.read(), re.M)
+            if m:
+                return int(m.group(1))
+    except OSError:
+        pass
+    try:
+        with open("/home/orangepi/timelapse/last_session.json") as f:
+            v = int(json.load(f).get("session_interval", 0))
+            if v > 0:
+                return v
+    except (OSError, ValueError, TypeError):
+        pass
+    try:
+        with open(os.path.join(SCRIPT_DIR, "config.sh")) as f:
+            m = re.search(r'^CAPTURE_INTERVAL=(\d+)', f.read(), re.M)
+            if m:
+                return int(m.group(1))
+    except OSError:
+        pass
+    return 60
+
 # ── Sensor data helpers ───────────────────────────────────────────────────────
 
 def get_sensor_archive_dir() -> str:
@@ -785,6 +813,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._serve_units()
         elif path == "/api/units/scan":
             self._send_json({"devices": scan_network()})
+        elif path == "/api/precapture":
+            self._serve_precapture()
         elif path == "/api/email-events":
             self._serve_email_events()
         elif path == "/api/email-log":
@@ -829,6 +859,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._add_unit(body)
         elif parsed.path == "/api/units/remove":
             self._remove_unit(body)
+        elif parsed.path == "/api/precapture":
+            self._save_precapture(body)
+        elif parsed.path == "/api/precapture/test":
+            self._test_precapture(body)
         elif parsed.path == "/api/email-log/clear":
             removed, kept = alert_lib.clear_finished()
             self._send_json({"ok": True, "removed": removed, "kept_pending": kept})
@@ -1266,6 +1300,66 @@ class Handler(http.server.BaseHTTPRequestHandler):
         save_units(new_units)
         restart_unit_forward()
         self._send_json({"ok": True})
+
+    def _serve_precapture(self):
+        pc = precapture.get_cfg()
+        status = {}
+        try:
+            with open(precapture.STATUS_FILE) as f:
+                status = json.load(f)
+        except Exception:
+            pass
+        pending = {}
+        try:
+            with open(precapture.PENDING_FILE) as f:
+                pending = json.load(f)
+        except Exception:
+            pass
+        self._send_json({"cfg": pc, "max_lead": current_interval(), "status": status,
+                         "pending_since": pending.get("started") if pending.get("end_cmd") else None})
+
+    def _save_precapture(self, body: dict):
+        cfg = load_system_config()
+        sources = {UART_SOURCE_KEY} | {u["name"] for u in cfg.get("units", [])}
+        target = str(body.get("target", UART_SOURCE_KEY)).strip()
+        cmd = str(body.get("cmd", "")).strip()
+        end_cmd = str(body.get("end_cmd", "")).strip()
+        try:
+            lead = int(body.get("lead_sec", 0))
+        except (ValueError, TypeError):
+            self._send_json({"ok": False, "error": "A másodperc érték nem szám"})
+            return
+        max_lead = current_interval()
+        if target not in sources:
+            self._send_json({"ok": False, "error": "Ismeretlen egység"})
+            return
+        if lead < 0 or lead > max_lead:
+            self._send_json({"ok": False,
+                             "error": f"A várakozás 0 és {max_lead} mp között lehet (az aktuális intervallum)"})
+            return
+        for t in (cmd, end_cmd):
+            if len(t) > 120 or any(ord(c) < 32 for c in t):
+                self._send_json({"ok": False, "error": "A parancs legfeljebb 120 karakter, egy sor lehet"})
+                return
+        cfg["precapture"] = {"enabled": bool(body.get("enabled", False)), "lead_sec": lead,
+                             "target": target, "cmd": cmd, "end_cmd": end_cmd}
+        try:
+            save_system_config(cfg)
+            self._send_json({"ok": True})
+        except Exception as e:
+            self._send_json({"ok": False, "error": str(e)})
+
+    def _test_precapture(self, body: dict):
+        # Sends the given command right now using the form values (no need to save first).
+        target = str(body.get("target", UART_SOURCE_KEY)).strip()
+        cmd = str(body.get("cmd", "")).strip()
+        phase = "test_end" if body.get("phase") == "end" else "test_start"
+        if not cmd:
+            self._send_json({"ok": False, "message": "Üres parancs, nincs mit küldeni"})
+            return
+        ok, msg, secs = precapture.send_command(target, cmd)
+        precapture.record(phase, ok, msg, secs, cmd)
+        self._send_json({"ok": ok, "message": msg, "secs": secs})
 
     def _serve_email_events(self):
         cfg = load_system_config()

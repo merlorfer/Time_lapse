@@ -238,6 +238,18 @@ cat /home/orangepi/timelapse/logs/email_events.jsonl   # a napló nyers formába
 
 ---
 
+## Képrögzítés előtti parancs (pl. ventilátor leállítása)
+
+Ha a kamera mellett a ventilátor elmozdítja a képet, a *Vezérlés → Képrögzítés előtti parancs* szekcióban megadható, hogy a rendszer minden kép előtt küldjön egy parancsot egy egységnek (soros egység vagy WiFiGateway), a kép után pedig egy lezáró parancsot. Mindkét parancs üresen hagyható.
+
+- **Parancs formátuma:** szabálymotor-parancs, ugyanaz, mint a gateway weboldalán a parancsablakban: `off Ventilator`, `on Ventilator`, `toggle Ventilator`, `set var3 1`, ... Az eszköznév a gateway-ben megadott egyedi név, szóköz nélkül.
+- **Menete:** a rögzítési ciklus elején a parancs kimegy, a rendszer a megadott másodpercig vár (a gateway visszaigazolásától számolva), elkészül a kép, majd kimegy a lezáró parancs. A várakozás legfeljebb az aktuális intervallum lehet. A kép a rácsidőhöz képest ennyivel később készül, de az intervallum pontos marad.
+- **Hibakezelés:** ha az előzetes parancs sikertelen, a kép attól még elkészül. A lezáró parancs minden esetben kimegy (3 próba), és ha így sem sikerül, a rendszer tartósan eltárolja, és a következő ciklus elején újra elküldi. Ha a lezáró parancs végleg elbukik, **email** megy (óránként legfeljebb egy), mert a vezérelt eszköz (pl. a ventilátor) kikapcsolva maradhatott.
+- **Kipróbálás:** a *▶ Parancs próba* és *■ Lezáró próba* gomb a beírt parancsot azonnal elküldi (mentés nélkül). Az "ok" válasz azt jelenti, hogy a gateway értelmezte a parancsot, nem azt, hogy az eszköz fizikailag kapcsolt.
+- A beállítás a következő képrögzítéstől érvényes, a timelapse-ot nem kell újraindítani. A napló: `logs/capture.log` (`[precapture]` sorok).
+
+---
+
 ## ESP32C6 firmware frissítése (távoli flash)
 
 Az ESP32C6 az Orange Pi USB portjára csatlakoztatva távolról is felflashelhető.

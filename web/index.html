@@ -209,6 +209,43 @@ button:disabled { opacity: .35; cursor: not-allowed; }
         </div>
       </div>
       <div style="margin-bottom:14px">
+        <button onclick="togglePrecapturePanel()" style="background:none;border:none;color:var(--muted);
+                font-size:12px;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;width:100%">
+          <span id="precapture-arrow" style="font-size:10px">▶</span>
+          <span style="font-weight:600;letter-spacing:.04em;text-transform:uppercase">Képrögzítés előtti parancs</span>
+          <span id="precapture-badge" style="margin-left:auto;font-size:11px"></span>
+        </button>
+        <div id="precapture-panel" style="display:none;margin-top:10px">
+          <div class="form-row">
+            <label><input type="checkbox" id="pc-enabled" style="width:auto;margin-right:6px">Parancs küldése a kép készítése előtt</label>
+          </div>
+          <div class="form-row">
+            <label>Hány másodperccel előtte <span id="pc-max-hint" style="color:var(--muted)"></span></label>
+            <input type="number" id="pc-lead" min="0" step="1" value="10">
+          </div>
+          <div class="form-row">
+            <label>Melyik egységnek</label>
+            <select id="pc-target" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:7px 10px;font-size:13px"></select>
+          </div>
+          <div class="form-row">
+            <label>Parancs a kép előtt</label>
+            <input type="text" id="pc-cmd" maxlength="120" placeholder="pl. off Ventilator (üresen hagyható)">
+          </div>
+          <div class="form-row">
+            <label>Lezáró parancs a kép után</label>
+            <input type="text" id="pc-end-cmd" maxlength="120" placeholder="pl. on Ventilator (üresen hagyható)">
+            <div class="hint">Szabálymotor-parancs: <code>on</code>/<code>off</code>/<code>toggle</code> eszköznév (szóköz nélkül), <code>set var1 1</code>, ...</div>
+          </div>
+          <div class="btn-grid">
+            <button class="btn-green" onclick="savePrecapture()">💾 Mentés</button>
+            <button class="btn-gray" onclick="testPrecapture('start')">▶ Parancs próba</button>
+            <button class="btn-gray" onclick="testPrecapture('end')">■ Lezáró próba</button>
+          </div>
+          <div id="pc-result" style="margin-top:8px;font-size:12px;color:var(--muted);white-space:pre-wrap"></div>
+          <div id="pc-status" style="margin-top:6px;font-size:11px;color:var(--muted);line-height:1.5"></div>
+        </div>
+      </div>
+      <div style="margin-bottom:14px">
         <div class="card-title" style="margin-bottom:8px">Preview stream (:8081)</div>
         <div class="btn-grid">
           <button class="btn-blue" onclick="runScript('preview_start')">▶ Preview indítás</button>
@@ -652,6 +689,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadVideos();
   loadSystemConfig();
   loadSerialSources();
+  loadPrecapture();
   statusInterval = setInterval(refreshStatus, 5000);
 });
 
@@ -1276,6 +1314,108 @@ async function clearEmailLog() {
     await api('/api/email-log/clear', 'POST', {});
   } catch (e) {}
   loadEmailLog();
+}
+
+// ── Képrögzítés előtti parancs ──────────────────────────────────────────────
+let pcMaxLead = 60;
+
+function togglePrecapturePanel() {
+  const panel = document.getElementById('precapture-panel');
+  const open = panel.style.display === 'none';
+  panel.style.display = open ? 'block' : 'none';
+  document.getElementById('precapture-arrow').textContent = open ? '▼' : '▶';
+  if (open) loadPrecapture();
+}
+
+function pcTime(ts) {
+  return new Date(ts * 1000).toLocaleTimeString('hu-HU', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+
+function pcLine(label, r) {
+  if (!r) return '';
+  const mark = r.ok ? '<span style="color:var(--green)">✓</span>' : '<span style="color:var(--red)">✗</span>';
+  return `${label}: ${mark} ${pcTime(r.ts)} · <span style="font-family:monospace">${escHtml(r.cmd || '')}</span> · ` +
+         (r.ok ? `${r.secs} mp` : `<span style="color:var(--red)">${escHtml(r.message)}</span>`);
+}
+
+async function loadPrecapture() {
+  let d, src;
+  try {
+    d = await api('/api/precapture');
+    src = (await api('/api/sensor-sources')).sources || [];
+  } catch (e) { return; }
+  const c = d.cfg;
+  pcMaxLead = d.max_lead;
+
+  const sel = document.getElementById('pc-target');
+  if (!src.some(s => s.key === c.target)) src.push({key: c.target, label: c.target + ' (nem található)', available: false});
+  sel.innerHTML = src.map(s => `<option value="${escAttr(s.key)}" ${s.available || s.key === c.target ? '' : 'disabled'}>` +
+                          `${escHtml(s.label)}${s.available ? '' : ' – nem elérhető'}</option>`).join('');
+  sel.value = c.target;
+
+  document.getElementById('pc-enabled').checked = !!c.enabled;
+  const lead = document.getElementById('pc-lead');
+  lead.max = pcMaxLead;
+  lead.value = c.lead_sec;
+  document.getElementById('pc-max-hint').textContent = `(0–${pcMaxLead} mp, az aktuális intervallum)`;
+  document.getElementById('pc-cmd').value = c.cmd;
+  document.getElementById('pc-end-cmd').value = c.end_cmd;
+
+  const badge = document.getElementById('precapture-badge');
+  badge.innerHTML = c.enabled
+    ? `<span style="color:var(--green)">● BE</span> · ${c.cmd ? escHtml(c.cmd) + ' · ' + c.lead_sec + ' mp' : 'csak lezáró'}`
+    : '<span>KI</span>';
+
+  const st = d.status || {};
+  let html = [pcLine('Utolsó előzetes', st.start), pcLine('Utolsó lezáró', st.end)].filter(Boolean).join('<br>');
+  if (d.pending_since && Date.now() / 1000 - d.pending_since > c.lead_sec + 90) {
+    html += `<br><span style="color:var(--yellow)">⚠ A lezáró parancs (${escHtml(c.end_cmd)}) még nem ment ki, a következő képrögzítésnél újra próbálja.</span>`;
+  }
+  document.getElementById('pc-status').innerHTML = html;
+}
+
+async function savePrecapture() {
+  const res = document.getElementById('pc-result');
+  res.style.color = 'var(--muted)';
+  res.textContent = 'Mentés...';
+  try {
+    const r = await api('/api/precapture', 'POST', {
+      enabled: document.getElementById('pc-enabled').checked,
+      lead_sec: parseInt(document.getElementById('pc-lead').value, 10),
+      target: document.getElementById('pc-target').value,
+      cmd: document.getElementById('pc-cmd').value,
+      end_cmd: document.getElementById('pc-end-cmd').value,
+    });
+    res.style.color = r.ok ? 'var(--green)' : 'var(--red)';
+    res.textContent = r.ok ? 'Mentve. A következő képrögzítéstől érvényes.' : (r.error || 'Hiba');
+    if (r.ok) loadPrecapture();
+  } catch (e) {
+    res.style.color = 'var(--red)';
+    res.textContent = 'Hálózati hiba';
+  }
+}
+
+async function testPrecapture(phase) {
+  const res = document.getElementById('pc-result');
+  const cmd = document.getElementById(phase === 'end' ? 'pc-end-cmd' : 'pc-cmd').value;
+  const target = document.getElementById('pc-target').value;
+  if (!cmd.trim()) {
+    res.style.color = 'var(--red)';
+    res.textContent = 'Üres a parancs, nincs mit kipróbálni.';
+    return;
+  }
+  if (!confirm(`Elküldöd most ezt a parancsot: "${cmd}" (${target})?`)) return;
+  res.style.color = 'var(--muted)';
+  res.textContent = 'Küldés...';
+  try {
+    const r = await api('/api/precapture/test', 'POST', { target, cmd, phase });
+    res.style.color = r.ok ? 'var(--green)' : 'var(--red)';
+    res.textContent = r.ok ? `Elküldve (${r.secs} mp). A gateway elfogadta a parancsot.` : `Sikertelen: ${r.message}`;
+    loadPrecapture();
+  } catch (e) {
+    res.style.color = 'var(--red)';
+    res.textContent = 'Hálózati hiba';
+  }
 }
 
 function toggleUnitsPanel() {
