@@ -40,6 +40,11 @@ EVENTS = [
     ("usb_fallback",    "Napi videó SD kártyára mentve (USB hiba)"),
     ("save_critical",   "Napi videó mentési hiba – KRITIKUS"),
     ("precapture_end_failed", "A képrögzítés utáni lezáró parancs sikertelen (a ventilátor kikapcsolva maradhatott)"),
+    ("unit_sensor_timeout", "Egység: egy szenzor nem jelentkezik a beállított időn belül (Sensor timeout)"),
+    ("unit_device_error",   "Egység: egy eszköz nem válaszol / parancs sikertelen"),
+    ("unit_log_error",      "Egység: hiba (E) a soros naplóban"),
+    ("unit_reboot",         "Egység: a CLCode01 újraindult"),
+    ("unit_unreachable",    "Egység: nem érhető el"),
 ]
 EVENT_IDS = {e[0] for e in EVENTS}
 EVENT_LABELS = dict(EVENTS)

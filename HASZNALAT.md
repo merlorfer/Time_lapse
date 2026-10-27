@@ -224,7 +224,7 @@ journalctl -u sensor-collector -f
 ## Email értesítések
 
 A *Rendszerbeállítások → 📧 Email értesítés* panelben (Gmail: `smtp.gmail.com`, 587, alkalmazásjelszó) kapcsolható be, és **eseményenként** választható, mikor küldjön emailt (alapból minden pipálva):
-rendszer elindult, újraindítás/leállítás indul, áramszünet utáni visszaállás, a felvétel újraindítása sikertelen, USB hiba boot után, napi videó render hiba, SD fallback, kritikus mentési hiba.
+rendszer elindult, újraindítás/leállítás indul, áramszünet utáni visszaállás, a felvétel újraindítása sikertelen, USB hiba boot után, napi videó render hiba, SD fallback, kritikus mentési hiba, a képrögzítés utáni lezáró parancs sikertelen, valamint az egységhibák (lásd: *Egységek hibafigyelése és Hibanapló*).
 
 **Internet nélkül:** az események nem vesznek el. A küldés előtt a rendszer sorba állítja őket (az SD kártyán, így áramszünetet is túlél), az `email-dispatcher` szolgáltatás pedig figyeli, mikortól érhető el az SMTP szerver, és csak akkor küldi el őket, régebbitől kezdve. A levélben az esemény *eredeti időpontja* szerepel, és ha késett, ez is látszik. Ez azért kell, mert áramszünet után a Pi gyorsabban elindul, mint a router. Az indulás utáni, még hálózat nélküli időbélyegeket a rendszer az óra szinkronizálása (NTP) után az uptime alapján javítja. 3 napig sikertelenül várakozó esemény "lejárt" állapotba kerül.
 
@@ -234,6 +234,34 @@ Az **Email napló** (ugyanabban a panelben) minden emailt kiváltó eseményt mu
 systemctl status email-dispatcher
 journalctl -u email-dispatcher -f
 cat /home/orangepi/timelapse/logs/email_events.jsonl   # a napló nyers formában
+```
+
+---
+
+## Egységek hibafigyelése és Hibanapló
+
+Az önálló `unit-watch` szolgáltatás percenként ellenőrzi az egységeket (minden WiFiGateway egységet, és a soros/UART forrást, ha be van kapcsolva), és **minden új hibáról** bejegyzést készít a webes felület **Hibanapló** kártyájában (a *Parancs kimenet* alatt), és emailt küld.
+
+Figyelt hibák (mindegyikhez külön email-kapcsoló van az *Email értesítések* panelben):
+- **Szenzor nem jelentkezik** – a firmware saját `Sensor timeout` hibája: a szenzor a beállított időn belül nem küldött adatot.
+- **Eszköz nem válaszol / parancs sikertelen** – a firmware `Nem valaszol` / `Parancs sikertelen` hibája (pl. a ventilátor nem reagál 3 próbálkozásra).
+- **Hiba (E) a soros naplóban** – az egység soros naplójának `E` szintű sorai. A `W` (figyelmeztetés) sorokat nem figyeli. Alapból kihagyja a BLE értesítés-hibákat (`Failed to send notification…`, `Failed to allocate mbuf…`), mert ezek csak a BLE kliens csatlakozása/lecsatlakozása közben fordulnak elő.
+- **A CLCode01 újraindult** – a log óraszámlálója visszaugrott, vagy megjelent a `created (reset: …)` sor (az újraindulás okával, pl. watchdog, brownout).
+- **Az egység nem érhető el** – az eszközlista 5 percig nem kérdezhető le.
+
+**Nyugtázás:** ugyanaz a hiba (ugyanaz az egység, eszköz és hibaüzenet) csak **egyszer** kerül a naplóba és az emailbe, akkor sem, ha a log később újra tartalmazza. Csak a *Nyugtázás* gomb után jelenhet meg újra új bejegyzésként (és új emailként). A *Mind nyugtázása* az összeset nyugtázza, a *Nyugtázottak törlése* eltávolítja a nyugtázott bejegyzéseket. Ha a firmware már nem jelzi az eszközhibát, a bejegyzésen "a firmware már nem jelzi" áll (nyugtázásig a bejegyzés megmarad). Helyreállt-emailt a rendszer nem küld.
+
+Egy újonnan indított figyelő a soros napló már meglévő sorait csak alapállapotként veszi fel (régi E sorokról nem küld levelet), a firmware éppen fennálló eszközhibáit viszont bejegyzi. A napló az SD kártyán van (`logs/unit_errors.json`), újraindítást túlél.
+
+Opcionális beállítás a `timelapse_config.json`-ban:
+```json
+"unit_watch": {"unreachable_min": 5, "ignore": ["Failed to send notification", "valami zajos E sor részlete"]}
+```
+(`ignore`: azok az `E` sorok maradnak ki, amelyek tartalmazzák valamelyik szöveget.)
+
+```bash
+systemctl status unit-watch
+journalctl -u unit-watch -f
 ```
 
 ---

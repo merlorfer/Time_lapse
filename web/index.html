@@ -294,6 +294,21 @@ button:disabled { opacity: .35; cursor: not-allowed; }
     <div class="console" id="output"><span class="console-empty">Futtass egy parancsot...</span></div>
   </div>
 
+  <!-- Unit error journal -->
+  <div class="card">
+    <div class="card-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span>Hibanapló <span id="uerr-badge" style="display:none;font-size:11px;font-weight:600;padding:1px 8px;border-radius:10px;background:#7f1d1d;color:var(--red)"></span></span>
+      <span style="flex:1"></span>
+      <button class="btn-gray" style="padding:4px 10px;font-size:11px" onclick="ackUnitErrors('', true)">✔ Mind nyugtázása</button>
+      <button class="btn-gray" style="padding:4px 10px;font-size:11px" onclick="clearAckedUnitErrors()">🗑 Nyugtázottak törlése</button>
+      <button class="btn-gray" style="padding:4px 10px;font-size:11px" onclick="loadUnitErrors()">↻</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Az egységek hibái (nem válaszoló eszköz, szenzor időtúllépés, soros naplóhiba, újraindulás, elérhetetlenség). Ugyanaz a hiba addig nem kerül újra a naplóba és emailbe, amíg nem nyugtázod.</div>
+    <div id="uerr-list" style="display:flex;flex-direction:column;gap:6px">
+      <span style="font-size:12px;color:var(--muted);font-style:italic">Betöltés...</span>
+    </div>
+  </div>
+
   <!-- Videos -->
   <div class="card">
     <div class="card-title" style="margin-bottom:0">Videók <button class="btn-gray" style="float:right;padding:4px 10px;font-size:11px" onclick="loadVideos()">↻</button></div>
@@ -690,6 +705,8 @@ document.addEventListener('DOMContentLoaded', () => {
   loadSystemConfig();
   loadSerialSources();
   loadPrecapture();
+  loadUnitErrors();
+  setInterval(loadUnitErrors, 30000);
   statusInterval = setInterval(refreshStatus, 5000);
 });
 
@@ -1306,6 +1323,65 @@ async function loadEmailLog() {
         <span style="font-size:11px;color:${color};white-space:nowrap">${badge}</span>
       </div>${err}</div>`;
   }).join('');
+}
+
+// ── Unit error journal ──────────────────────────────────────────────────────
+const UERR_KIND = {
+  sensor_timeout: 'Szenzor nem jelentkezik', device_no_response: 'Eszköz nem válaszol',
+  command_failed: 'Parancs sikertelen', device_error: 'Eszközhiba', log_error: 'Soros naplóhiba',
+  reboot: 'Újraindulás', unreachable: 'Nem elérhető'
+};
+
+function fmtUerrTime(ts) {
+  const d = new Date(ts * 1000), p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+async function loadUnitErrors() {
+  const list = document.getElementById('uerr-list');
+  const badge = document.getElementById('uerr-badge');
+  let d;
+  try { d = await api('/api/unit-errors'); } catch (e) { return; }
+  badge.style.display = d.unacked ? '' : 'none';
+  badge.textContent = d.unacked + ' nyugtázatlan';
+  if (!d.entries.length) {
+    list.innerHTML = '<span style="font-size:12px;color:var(--muted);font-style:italic">Nincs rögzített hiba.</span>';
+    return;
+  }
+  const rows = d.entries.slice().sort((a, b) =>
+    (a.acked - b.acked) || (b.last_ts - a.last_ts)).slice(0, 150);
+  list.innerHTML = rows.map(e => {
+    const color = e.acked ? 'var(--muted)' : 'var(--red)';
+    const where = e.device ? `${escHtml(e.unit)} › ${escHtml(e.device)}` : escHtml(e.unit);
+    const times = e.count > 1
+      ? `${escHtml(fmtUerrTime(e.first_ts))} – ${escHtml(fmtUerrTime(e.last_ts))} · ${e.count}×`
+      : escHtml(fmtUerrTime(e.first_ts));
+    const state = e.acked ? `<span style="color:var(--muted)">✔ nyugtázva</span>`
+      : (e.cleared_ts ? '<span style="color:var(--yellow)">a firmware már nem jelzi</span>' : '');
+    const det = (e.details || []).length
+      ? `<details style="margin-top:4px"><summary style="font-size:11px;color:var(--muted);cursor:pointer">részletek</summary>
+           <div style="font-family:monospace;font-size:11px;color:var(--muted);white-space:pre-wrap;word-break:break-word;margin-top:4px">${escHtml(e.details.join('\n'))}</div></details>` : '';
+    const btn = e.acked ? '' :
+      `<button class="btn-gray" style="padding:3px 10px;font-size:11px" onclick="ackUnitErrors('${e.id}', false)">Nyugtázás</button>`;
+    return `<div style="padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-left:3px solid ${color};border-radius:6px;${e.acked ? 'opacity:.65' : ''}">
+      <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">
+        <span style="font-size:11px;color:${color};white-space:nowrap">${escHtml(UERR_KIND[e.kind] || e.kind)}</span>
+        <span style="font-size:13px;color:var(--text);flex:1;min-width:160px;word-break:break-word"><b>${where}</b> – ${escHtml(e.message)}</span>
+        ${btn}
+      </div>
+      <div style="font-size:11px;color:var(--muted);font-family:monospace;margin-top:2px">${times} ${state}</div>${det}</div>`;
+  }).join('');
+}
+
+async function ackUnitErrors(id, all) {
+  try { await api('/api/unit-errors/ack', 'POST', all ? { all: true } : { id }); } catch (e) {}
+  loadUnitErrors();
+}
+
+async function clearAckedUnitErrors() {
+  if (!confirm('Törlöd a nyugtázott hibákat a naplóból?')) return;
+  try { await api('/api/unit-errors/clear', 'POST', {}); } catch (e) {}
+  loadUnitErrors();
 }
 
 async function clearEmailLog() {

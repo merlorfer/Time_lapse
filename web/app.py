@@ -27,6 +27,7 @@ SCRIPT_DIR        = "/home/orangepi/timelapse/scripts"
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 sys.path.insert(0, SCRIPT_DIR)
 import alert_lib  # shared with send_alert.py / email_dispatcher.py
+import unit_errors  # error journal written by unit_watch.py
 import precapture  # command before each frame (shared with capture.sh)
 LOG_DIR           = "/home/orangepi/timelapse/logs"
 FRAME_DIR         = "/tmp/timelapse_frames"
@@ -815,6 +816,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json({"devices": scan_network()})
         elif path == "/api/precapture":
             self._serve_precapture()
+        elif path == "/api/unit-errors":
+            entries = unit_errors.list_entries()
+            self._send_json({"entries": entries,
+                             "unacked": sum(1 for e in entries if not e.get("acked"))})
         elif path == "/api/email-events":
             self._serve_email_events()
         elif path == "/api/email-log":
@@ -863,6 +868,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._save_precapture(body)
         elif parsed.path == "/api/precapture/test":
             self._test_precapture(body)
+        elif parsed.path == "/api/unit-errors/ack":
+            n = unit_errors.ack(str(body.get("id", "")), bool(body.get("all")))
+            self._send_json({"ok": True, "acked": n})
+        elif parsed.path == "/api/unit-errors/clear":
+            self._send_json({"ok": True, "removed": unit_errors.clear_acked()})
         elif parsed.path == "/api/email-log/clear":
             removed, kept = alert_lib.clear_finished()
             self._send_json({"ok": True, "removed": removed, "kept_pending": kept})
