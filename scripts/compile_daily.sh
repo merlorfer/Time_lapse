@@ -1,7 +1,13 @@
 #!/bin/bash
 # =============================================================================
-# compile_daily.sh – Napi timelapse videó + master concat
-# Cron: 5 0 * * * orangepi /home/orangepi/timelapse/scripts/compile_daily.sh
+# compile_daily.sh – Egy rögzítési munkamenet videója + master concat
+# Használat: compile_daily.sh [--day YYYY-MM-DD]
+#   --day D   a D napon KEZDŐDÖTT rögzítési ablak képeit fűzi össze (éjfélen átnyúló
+#             ablaknál az éjfél utáni képek is ide tartoznak). A videó neve D.mp4.
+#   (nincs)   kézi indítás: minden esedékes, azaz már lezárult ablakú napot feldolgoz.
+# Automatikusan a compile_check.sh hívja percenként: az ablak vége után 1 perccel indul.
+# A képek a ramdisken maradnak, és csak a sikeres mentés után törlődnek (pontosan azok,
+# amelyekből a videó készült).
 # =============================================================================
 
 source "$(dirname "$0")/config.sh"
@@ -21,9 +27,41 @@ send_alert() {
 SD_BASE="/home/orangepi/timelapse/videos"
 SD_ARCHIVE="${SD_BASE}/archive"
 
-YESTERDAY=$(date -d "yesterday" '+%Y-%m-%d')
+SESSIONS="${SCRIPT_DIR}/session_days.py"
 
-log "=== Compiling daily video for ${YESTERDAY} ==="
+DAY=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --day) DAY="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+
+# Paraméter nélkül (kézi gomb): az esedékes napok egymás után, a zárat a gyerekfolyamat fogja.
+if [ -z "$DAY" ]; then
+    DUE=$(python3 "$SESSIONS" due --grace 0)
+    if [ -z "$DUE" ]; then
+        MSG="Nincs esedékes nap: a ramdisken lévő képek rögzítési ablaka még nem zárult le (az ablak vége után automatikusan összefűződnek)."
+        log "$MSG"; echo "$MSG"
+        exit 0
+    fi
+    RC=0
+    for D in $DUE; do bash "$0" --day "$D" || RC=1; done
+    exit $RC
+fi
+if ! [[ "$DAY" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    echo "Érvénytelen dátum: $DAY"; exit 1
+fi
+
+# Egyszerre csak egy összefűzés futhat.
+exec 6>/tmp/timelapse_compile.lock
+flock -n 6 || { log "Másik összefűzés fut, kihagyva (${DAY})"; exit 0; }
+
+FRAME_LIST=""
+FFMPEG_INPUT=""
+trap 'rm -f "$FRAME_LIST" "$FFMPEG_INPUT"' EXIT
+
+log "=== Compiling session video for ${DAY} ==="
 
 # ── USB állapot ellenőrzés ────────────────────────────────────────────────────
 USB_MOUNT="/mnt/timelapse"
@@ -64,25 +102,23 @@ remount_usb() {
 
 # ── Frame lista összeállítása ─────────────────────────────────────────────────
 FRAME_LIST=$(mktemp)
-ls "${FRAME_DIR}/${YESTERDAY}_"*.jpg 2>/dev/null | sort > "$FRAME_LIST"
+python3 "$SESSIONS" frames "$DAY" > "$FRAME_LIST"
 
 FRAME_COUNT=$(wc -l < "$FRAME_LIST")
 if [ "$FRAME_COUNT" -eq 0 ]; then
-    log "No frames found for ${YESTERDAY}, skipping"
-    rm -f "$FRAME_LIST"
+    log "No frames found for ${DAY}, skipping"
     exit 0
 fi
-log "Found ${FRAME_COUNT} frames"
+log "Found ${FRAME_COUNT} frames ($(basename "$(head -1 "$FRAME_LIST")" .jpg) .. $(basename "$(tail -1 "$FRAME_LIST")" .jpg))"
 
 # ── FFmpeg input fájllista ────────────────────────────────────────────────────
 FFMPEG_INPUT=$(mktemp)
 while IFS= read -r f; do
     echo "file '$f'" >> "$FFMPEG_INPUT"
 done < "$FRAME_LIST"
-rm -f "$FRAME_LIST"
 
 # ── Napi videó generálása RAMDISKRE ──────────────────────────────────────────
-TMP_DAILY="/tmp/timelapse_compile_${YESTERDAY}.mp4"
+TMP_DAILY="/tmp/timelapse_compile_${DAY}.mp4"
 
 log "Renderelés ramdiskre: $TMP_DAILY"
 ffmpeg -y \
@@ -108,7 +144,7 @@ if [ "$TMP_SIZE" -lt 10240 ]; then
     log "ERROR: renderelt fájl túl kicsi (${TMP_SIZE} bájt), valószínűleg hibás"
     rm -f "$TMP_DAILY"
     send_alert render_error "Timelapse render hiba" \
-        "A(z) ${YESTERDAY} napi videó renderelése sikertelen (fájlméret: ${TMP_SIZE} bájt). Rendszer: $(hostname)"
+        "A(z) ${DAY} napi videó renderelése sikertelen (fájlméret: ${TMP_SIZE} bájt). Rendszer: $(hostname)"
     exit 1
 fi
 log "Render kész: $(du -sh "$TMP_DAILY" | cut -f1)"
@@ -119,7 +155,7 @@ DEST_DAILY=""
 if [ "$USB_OK" = true ]; then
     USB_ARCHIVE="${USB_MOUNT}/archive"
     mkdir -p "$USB_ARCHIVE"
-    DEST_DAILY="${USB_ARCHIVE}/${YESTERDAY}.mp4"
+    DEST_DAILY="${USB_ARCHIVE}/${DAY}.mp4"
 
     log "Másolás USB-re: $DEST_DAILY"
     cp "$TMP_DAILY" "$DEST_DAILY" 2>> "$LOG"
@@ -157,7 +193,7 @@ fi
 # SD fallback, ha USB sikertelen vagy nem elérhető
 if [ "$USB_OK" = false ]; then
     mkdir -p "$SD_ARCHIVE"
-    DEST_DAILY="${SD_ARCHIVE}/${YESTERDAY}.mp4"
+    DEST_DAILY="${SD_ARCHIVE}/${DAY}.mp4"
 
     log "Mentés SD kártyára: $DEST_DAILY"
     cp "$TMP_DAILY" "$DEST_DAILY" 2>> "$LOG"
@@ -169,17 +205,17 @@ if [ "$USB_OK" = false ]; then
     else
         log "ERROR: SD mentés is sikertelen (méret: ${SD_SIZE})"
         send_alert save_critical "Timelapse mentési hiba – KRITIKUS" \
-            "A(z) ${YESTERDAY} napi videó sem USB-re, sem SD kártyára nem mentható. Azonnali beavatkozás szükséges! Rendszer: $(hostname)"
+            "A(z) ${DAY} napi videó sem USB-re, sem SD kártyára nem mentható. Azonnali beavatkozás szükséges! Rendszer: $(hostname)"
         exit 1
     fi
 
     send_alert usb_fallback "Timelapse USB hiba – SD fallback" \
-        "A(z) ${YESTERDAY} napi videó USB helyett SD kártyára mentve (${DEST_DAILY}). Az USB meghajtó ellenőrzése szükséges. Rendszer: $(hostname)"
+        "A(z) ${DAY} napi videó USB helyett SD kártyára mentve (${DEST_DAILY}). Az USB meghajtó ellenőrzése szükséges. Rendszer: $(hostname)"
 fi
 
 # ── Framek törlése ramdiskről ─────────────────────────────────────────────────
-DELETED=$(ls "${FRAME_DIR}/${YESTERDAY}_"*.jpg 2>/dev/null | wc -l)
-rm -f "${FRAME_DIR}/${YESTERDAY}_"*.jpg
+DELETED=$(wc -l < "$FRAME_LIST")
+xargs -d '\n' rm -f < "$FRAME_LIST"
 log "Deleted ${DELETED} frames from ramdisk"
 
 # ── Master videó újraépítése archívból ───────────────────────────────────────
@@ -216,6 +252,3 @@ else
 fi
 
 log "=== Done ==="
-
-# Szenzor adatok mentése
-bash "$(dirname "$0")/sensor_backup.sh" >> "$LOG" 2>&1

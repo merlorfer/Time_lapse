@@ -61,7 +61,7 @@ Ctrl+C a kilépéshez. Helyes működésnél ilyesmit látsz:
 ```bash
 /home/orangepi/timelapse/scripts/stop_timelapse.sh
 ```
-A már elkészült képek megmaradnak a ramdisken – a következő éjféli compile feldolgozza őket.
+A már elkészült képek megmaradnak a ramdisken – a rögzítési ablak vége után 1 perccel automatikusan videó készül belőlük (lásd: *Mikor készül a videó?*).
 
 ---
 
@@ -90,7 +90,7 @@ Várj, amíg a folyamat véget ér, majd próbáld újra. Ezután a pendrive fiz
 sudo mount /mnt/timelapse
 ```
 
-A rendszer automatikusan érzékeli: ha `/mnt/timelapse` mountolva és írható, azt használja; ha nincs, az SD kártyára ment. Visszadugás után az éjféli compile és a szenzor backup ismét a pendrive-ra kerül.
+A rendszer automatikusan érzékeli: ha `/mnt/timelapse` mountolva és írható, azt használja; ha nincs, az SD kártyára ment. Visszadugás után a videó összefűzés és a szenzor backup ismét a pendrive-ra kerül.
 
 > Alternatíva: használd az interaktív `storage_select.sh` scriptet (lásd lentebb).
 
@@ -368,9 +368,23 @@ A webes felületek leállíthatók anélkül, hogy a timelapse felvétel megszak
 
 ---
 
+## Mikor készül a videó?
+
+A videó **a rögzítési ablak vége után 1 perccel** készül el automatikusan (a `compile_check.sh` percenként ellenőriz). Ez ugyanígy működik az éjfélen átnyúló (pl. 22:00–06:00, 08:00–00:00) és az egy napon belüli (pl. 06:00–20:00) ablaknál is.
+
+- **A videó neve az ablak kezdő napja** (`YYYY-MM-DD.mp4`). A 22:00–06:00-s éjszaka egyetlen videó, az esti indulás napjának nevével; az éjfél utáni képek is ebbe kerülnek.
+- **Amíg az ablak tart, a képek a ramdisken maradnak.** Csak a **sikeres** összefűzés és mentés után törlődnek, és pontosan azok, amelyekből a videó készült.
+- Ha az összefűzés sikertelen, a képek megmaradnak; a rendszer legfeljebb 3-szor próbálja újra automatikusan, 20 percenként, és e-mail riasztást küld (ha be van kapcsolva).
+- A szenzoradatok mentése külön fut, naponta 00:05-kor (`sensor_backup.sh`), a videótól függetlenül.
+- Az ablak a futó munkamenet beállítása (`/tmp/timelapse_session.conf`), leállítás után az utolsó mentett munkamenet ablaka. Ellenőrzés: `python3 /home/orangepi/timelapse/scripts/session_days.py window` (esedékes napok: `... due`).
+
+A webes **📅 Napi compile** gomb (és a `compile_daily.sh` paraméter nélkül) csak az **már lezárult ablakú** napokat fűzi össze. Ha nincs ilyen, megmondja, hogy még nem esedékes (a folyamatban lévő nap képeihez nem nyúl).
+
+---
+
 ## Azonnali renderelés (meglévő képekből)
 
-Ha nem akarsz várni az éjféli automatikus compile-ra:
+Ha nem akarsz várni az ablak végére és az automatikus összefűzésre:
 
 ```bash
 # Renderelés automatikus névvel (archívba kerül)
@@ -380,7 +394,7 @@ Ha nem akarsz várni az éjféli automatikus compile-ra:
 /home/orangepi/timelapse/scripts/render_now.sh --output /mnt/timelapse/archive/sajat_nev.mp4
 ```
 
-A ramdisken (`/tmp/timelapse_frames/`) lévő összes képet feldolgozza. A képek a renderelés után **megmaradnak** – csak az éjféli `compile_daily.sh` törli őket.
+A ramdisken (`/tmp/timelapse_frames/`) lévő összes képet feldolgozza. A képek a renderelés után **megmaradnak** – csak a sikeres napi összefűzés (`compile_daily.sh`) törli őket.
 
 ---
 

@@ -7,8 +7,13 @@ TZ=Europe/Budapest
 # Képrögzítés: percenként (az időablakot capture.sh kezeli belülről: 06:00–20:00)
 * * * * * orangepi /home/orangepi/timelapse/scripts/capture.sh
 
-# Napi videó fordítás: éjfél után 5 perccel (az előző nap képkockáiból)
-5 0 * * * orangepi /home/orangepi/timelapse/scripts/compile_daily.sh
+# Videó összefűzés: percenként ellenőrzi, és a rögzítési ablak vége után 1 perccel összefűzi a
+# munkamenet képeit (éjfélen átnyúló ablaknál is; a videó neve az ablak kezdő napja).
+# A képek addig a ramdisken maradnak, és csak a sikeres mentés után törlődnek.
+* * * * * orangepi /home/orangepi/timelapse/scripts/compile_check.sh
+
+# Szenzor adatok napi mentése ramdiskről (a videótól független)
+5 0 * * * orangepi /home/orangepi/timelapse/scripts/sensor_backup.sh >> /home/orangepi/timelapse/logs/compile.log 2>&1
 
 # Ütemezett reboot ellenőrzés: óránként (a reboot időpontja a timelapse_config.json-ban állítható)
 0 * * * * orangepi /home/orangepi/timelapse/scripts/check_scheduled_reboot.sh

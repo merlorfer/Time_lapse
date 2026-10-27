@@ -1,6 +1,6 @@
 #!/bin/bash
 # sensor_backup.sh – Szenzor adatok napi mentése ramdiskről pendrive/SD-re
-# Hívja: compile_daily.sh (00:05 cron)
+# Hívja: cron, naponta 00:05-kor (a compile-tól független)
 
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 source "$SCRIPT_DIR/config.sh"

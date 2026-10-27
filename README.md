@@ -17,7 +17,8 @@ amely hozzáfűződik egy kumulatív master videóhoz.
       ▼
 /tmp/timelapse_frames/        ← tmpfs ramdisk (elvész reboot-nál – elfogadott)
 
-[éjféli compile cron 00:05] ──→ /mnt/timelapse/archive/YYYY-MM-DD.mp4
+[compile_check cron, percenként] ─ az ablak vége +1 perc ─→ /mnt/timelapse/archive/YYYY-MM-DD.mp4
+                                 (a név az ablak kezdő napja; a képek sikeres mentés után törlődnek)
                                  + master.mp4 újraépítés (concat)
 
 [Python HTTP server :8080]  ←── /mnt/timelapse/  (USB, vagy SD fallback)
@@ -31,7 +32,9 @@ amely hozzáfűződik egy kumulatív master videóhoz.
 scripts/
 ├── config.sh            ← közös konfiguráció (időablak, útvonalak, ffmpeg params)
 ├── capture.sh           ← fswebcam, percenként, csak ha aktív + időablakban
-├── compile_daily.sh     ← napi videó + master concat, éjfél 00:05-kor
+├── compile_check.sh     ← percenként: az ablak vége után 1 perccel indítja a compile-t
+├── compile_daily.sh     ← egy munkamenet videója + master concat (--day YYYY-MM-DD)
+├── session_days.py      ← melyik kép melyik munkamenet-naphoz tartozik, mikor esedékes
 ├── render_now.sh        ← azonnali renderelés a ramdisken lévő képekből
 ├── start_timelapse.sh   ← rögzítés kézi indítása (paraméterekkel)
 ├── stop_timelapse.sh    ← rögzítés kézi leállítása
@@ -191,7 +194,7 @@ Beállításhoz vagy ellenőrzéshez – nem fut folyamatosan, csak igény szeri
 /home/orangepi/timelapse/scripts/capture.sh
 ls -lh /tmp/timelapse_frames/
 
-# Kézi compile (néhány kép után)
+# Kézi compile (csak a már lezárult ablakú napokat dolgozza fel)
 /home/orangepi/timelapse/scripts/compile_daily.sh
 ls -lh /mnt/timelapse/archive/
 
