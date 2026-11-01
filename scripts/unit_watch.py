@@ -11,6 +11,8 @@ Per source (every active unit, and "UART" when serial_enabled), once a minute:
      Failing to get the list for `unreachable_min` minutes = "unit unreachable".
   2. the unit's serial log (gateway: /api/gw/serial-log, UART: /api/serial-logs)
        E-level lines (except the ignore list)
+       rules `log "text"` actions: "E (...) RULES_ENGINE: Rule log: text" -> own event
+         that carries the custom text (kept verbatim, digits are not masked)
        CLCode01 reboot (tick counter going backwards / "created (reset: ...)")
 
 Dedup rule (see unit_errors.py): an error that is still unacknowledged never
@@ -42,12 +44,15 @@ SEEN_MAX         = 600
 WRAP_GUARD       = 4_000_000_000     # ESP tick (ms) wraps at 2^32: not a reboot
 REBOOT_SLACK     = 2000              # ms the tick may "go back" before it counts as a reboot
 DEFAULT_UNREACHABLE_MIN = 5
-# Known repeating E lines that are not unit faults (BLE client came and went).
-DEFAULT_IGNORE = ["Failed to send notification", "Failed to allocate mbuf for notification"]
+# E lines that are not reported: BLE client came and went (notification errors),
+# and the device manager's "Device limit reached" (reported as noise by the user).
+DEFAULT_IGNORE = ["Failed to send notification", "Failed to allocate mbuf for notification",
+                  "Device limit reached"]
 
 _LINE_RE  = re.compile(r"^\s*([EWIDV]) \((\d+)\) ([^:]+): (.*)$")
 _ANSI_RE  = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _RESET_RE = re.compile(r"created \(reset: (.+)\)\s*$")
+_RULE_LOG_PREFIX = "Rule log: "      # CLCode01 rules_engine.c, ACT_LOG_ERROR
 
 KIND_EVENT = {
     "sensor_timeout":     ("unit_sensor_timeout", "szenzor nem jelentkezik"),
@@ -55,6 +60,7 @@ KIND_EVENT = {
     "command_failed":     ("unit_device_error",   "parancs sikertelen"),
     "device_error":       ("unit_device_error",   "eszközhiba"),
     "log_error":          ("unit_log_error",      "hiba a soros naplóban"),
+    "rule_log":           ("unit_rule_log",       "rules üzenet"),
     "reboot":             ("unit_reboot",         "a CLCode01 újraindult"),
     "unreachable":        ("unit_unreachable",    "az egység nem érhető el"),
 }
@@ -192,6 +198,13 @@ def process_log(source: str, raw_lines: list, st: dict, ignore: list) -> list:
         raw, level, tick, tag, msg = parsed[i]
         if level != "E" or any(s and s in raw for s in ignore):
             continue
+        if tag == "RULES_ENGINE" and msg.startswith(_RULE_LOG_PREFIX):
+            text = msg[len(_RULE_LOG_PREFIX):].strip()
+            events.append({
+                "kind": "rule_log", "key": f"rulelog|{source}|{text}", "device": "",
+                "message": text, "details": [p[0] for p in parsed[max(0, i - 3):i + 1]],
+            })
+            continue
         events.append({
             "kind": "log_error", "key": f"log|{source}|{tag}|{normalize(msg)}", "device": "",
             "message": f"{tag}: {msg}",
@@ -235,14 +248,15 @@ def emit(source: str, ev: dict):
     body = [f"Egység: {source}"]
     if ev["device"]:
         body.append(f"Eszköz: {ev['device']}")
-    body.append(f"Hiba: {ev['message']}")
+    body.append(f"{'Üzenet (rules log)' if ev['kind'] == 'rule_log' else 'Hiba'}: {ev['message']}")
     body.append(f"Időpont: {alert_lib.fmt_ts(entry['first_ts'])}")
     if ev["details"]:
         body += ["", "Részletek:"] + [f"  {d}" for d in ev["details"]]
     body += ["", "Ugyanez a hiba nem kerül újra elküldésre, amíg a webes felület Hibanapló",
              "részében nem nyugtázod. Rendszer: " + os.uname().nodename]
     try:
-        alert_lib.enqueue(event_id, f"{source}: {short}", "\n".join(body))
+        subject = f"{source}: {ev['message']}" if ev["kind"] == "rule_log" else f"{source}: {short}"
+        alert_lib.enqueue(event_id, subject, "\n".join(body))
     except Exception as exc:
         print(f"[unit_watch] enqueue failed: {exc}")
 

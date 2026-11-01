@@ -245,7 +245,8 @@ Az önálló `unit-watch` szolgáltatás percenként ellenőrzi az egységeket (
 Figyelt hibák (mindegyikhez külön email-kapcsoló van az *Email értesítések* panelben):
 - **Szenzor nem jelentkezik** – a firmware saját `Sensor timeout` hibája: a szenzor a beállított időn belül nem küldött adatot.
 - **Eszköz nem válaszol / parancs sikertelen** – a firmware `Nem valaszol` / `Parancs sikertelen` hibája (pl. a ventilátor nem reagál 3 próbálkozásra).
-- **Hiba (E) a soros naplóban** – az egység soros naplójának `E` szintű sorai. A `W` (figyelmeztetés) sorokat nem figyeli. Alapból kihagyja a BLE értesítés-hibákat (`Failed to send notification…`, `Failed to allocate mbuf…`), mert ezek csak a BLE kliens csatlakozása/lecsatlakozása közben fordulnak elő.
+- **Hiba (E) a soros naplóban** – az egység soros naplójának `E` szintű sorai. A `W` (figyelmeztetés) sorokat nem figyeli. Alapból kihagyja a BLE értesítés-hibákat (`Failed to send notification…`, `Failed to allocate mbuf…`, mert ezek csak a BLE kliens csatlakozása/lecsatlakozása közben fordulnak elő) és a `Device limit reached` sort.
+- **Rules üzenet** – a szabályokban a `log "szöveg"` művelettel kiváltott saját hibaüzenet. Az email tárgya és a Hibanapló bejegyzése az **egység nevét és a saját szöveget** mutatja (pl. `Bathroom01: Vizszint kritikusan alacsony`). A szöveg szó szerint azonosít: két különböző szöveg két külön bejegyzés (a számokat sem maszkolja), ugyanaz a szöveg ugyanazon az egységen nyugtázásig csak egyszer jön.
 - **A CLCode01 újraindult** – a log óraszámlálója visszaugrott, vagy megjelent a `created (reset: …)` sor (az újraindulás okával, pl. watchdog, brownout).
 - **Az egység nem érhető el** – az eszközlista 5 percig nem kérdezhető le.
 
@@ -255,9 +256,9 @@ Egy újonnan indított figyelő a soros napló már meglévő sorait csak alapá
 
 Opcionális beállítás a `timelapse_config.json`-ban:
 ```json
-"unit_watch": {"unreachable_min": 5, "ignore": ["Failed to send notification", "valami zajos E sor részlete"]}
+"unit_watch": {"unreachable_min": 5, "ignore": ["Failed to send notification", "Failed to allocate mbuf", "Device limit reached", "valami zajos E sor részlete"]}
 ```
-(`ignore`: azok az `E` sorok maradnak ki, amelyek tartalmazzák valamelyik szöveget.)
+(`ignore`: azok az `E` sorok maradnak ki, amelyek tartalmazzák valamelyik szöveget. Ha megadod, **lecseréli** az alaplistát, ezért az alapértelmezett mintákat is írd bele.)
 
 ```bash
 systemctl status unit-watch

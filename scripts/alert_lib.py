@@ -43,6 +43,7 @@ EVENTS = [
     ("unit_sensor_timeout", "Egység: egy szenzor nem jelentkezik a beállított időn belül (Sensor timeout)"),
     ("unit_device_error",   "Egység: egy eszköz nem válaszol / parancs sikertelen"),
     ("unit_log_error",      "Egység: hiba (E) a soros naplóban"),
+    ("unit_rule_log",       "Egység: a rules saját hibaüzenete (log \"szöveg\" művelet)"),
     ("unit_reboot",         "Egység: a CLCode01 újraindult"),
     ("unit_unreachable",    "Egység: nem érhető el"),
 ]
