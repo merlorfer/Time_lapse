@@ -889,13 +889,18 @@ const CAMERA_SCRIPTS = ['start_timelapse', 'stop_timelapse', 'render_now', 'comp
 
 async function runScript(script, params = {}) {
   if (running) return;
-  if (CAMERA_SCRIPTS.includes(script) && currentCamera) params = Object.assign({camera: currentCamera}, params);
+  if (CAMERA_SCRIPTS.includes(script)) {
+    if (!currentCamera) { setOutput('Nincs kiválasztott kamera.', true); return; }
+    params = Object.assign({camera: currentCamera}, params);
+  }
   setOutput('<span class="spinner"></span>Futás: ' + script + '…', false);
   running = true;
   try {
     const res = await api('/api/run', 'POST', { script, params });
     setOutput(res.output || '(nincs kimenet)', !res.ok);
     refreshStatus();
+    // the start dialog's window/interval become the camera's saved settings: show them
+    if (script === 'start_timelapse') await refreshCameraList(true);
   } catch (e) {
     setOutput('Hálózati hiba: ' + e.message, true);
   } finally {
@@ -922,8 +927,9 @@ document.addEventListener('click', e => {
   }
 });
 
-function openStartModal() {
+async function openStartModal() {
   // A kamera mentett beállításai (futó timelapse-nál az aktuális session értékei) töltődnek be
+  await refreshCameraList(false);
   const c = curCam() || {};
   const run = lastStatus && lastStatus.cs && lastStatus.cs.active ? lastStatus.cs.session : null;
   const s = run || {start: c.start, end: c.end, interval: c.interval, storage: ''};
@@ -1448,7 +1454,10 @@ async function loadCameras() {
 
 function onCameraChange(fromLoad) {
   const sel = document.getElementById('camera-select');
-  if (!fromLoad) currentCamera = sel.value;
+  if (!fromLoad) {
+    if (!sel.value) { sel.value = currentCamera; return; }     // not a camera: keep the current one
+    currentCamera = sel.value;
+  }
   try { localStorage.setItem('tl_camera', currentCamera); } catch (e) {}
   const c = curCam() || {};
   document.querySelectorAll('.cam-name').forEach(el => { el.textContent = currentCamera; });
@@ -1459,6 +1468,17 @@ function onCameraChange(fromLoad) {
   loadVideos();
   loadPrecapture();
   fillCamSettings();
+  refreshCameraList(true);
+}
+
+// Re-read the cameras (saved settings change on the server: start dialog, other browser, ...).
+// The settings panel is refilled unless the user is typing in it right now.
+async function refreshCameraList(refill) {
+  let d;
+  try { d = await api('/api/cameras'); } catch (e) { return; }
+  cameraList = d.cameras || cameraList;
+  const panel = document.getElementById('camset-panel');
+  if (refill && !panel.contains(document.activeElement)) fillCamSettings();
 }
 
 function updateCameraState(cams) {

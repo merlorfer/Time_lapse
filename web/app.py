@@ -1611,15 +1611,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json({"ok": False, "output": f"Script nem található: {script_path}"})
             return
 
+        if script in CAMERA_SCRIPTS:
+            # Which camera? An unknown one is an error; with several cameras the per-camera
+            # scripts need it named (never silently fall back to the USB camera).
+            cam_arg = str(params.get("camera", "")).strip()
+            if cam_arg and not cameras.get_camera(cam_arg):
+                self._send_json({"ok": False, "output": f"Ismeretlen kamera: {cam_arg}"})
+                return
+            if not cam_arg and script != "compile_daily" and len(cameras.get_cameras()) > 1:
+                self._send_json({"ok": False, "output": "Válassz kamerát (a felső legördülőben)."})
+                return
+
         if script == "start_timelapse":
             # the values typed in the start dialog become the camera's saved settings
+            # (not while it is already running: then the script just reports that)
             cam_name = str(params.get("camera", "")).strip() or cameras.default_name()
             typed = {k: params[k] for k in ("start", "end", "interval") if params.get(k) not in (None, "")}
             clean, err = cameras.validate_settings(typed)
             if err:
                 self._send_json({"ok": False, "output": err})
                 return
-            if clean and cameras.get_camera(cam_name):
+            if clean and cameras.get_camera(cam_name) and not os.path.exists(cameras.paths(cam_name)["active_flag"]):
                 cameras.update_camera(cam_name, {"settings": clean})
         args = build_args(script, params)
         cmd  = ["bash", script_path] + args
