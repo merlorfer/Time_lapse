@@ -21,7 +21,18 @@
 body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; }
 
 /* ── Layout ── */
-header { background: var(--card); border-bottom: 1px solid var(--border); padding: 14px 20px; display: flex; align-items: center; gap: 12px; }
+header { background: var(--card); border-bottom: 1px solid var(--border); padding: 14px 20px; display: flex; align-items: center; gap: 12px 16px; flex-wrap: wrap;
+         position: sticky; top: 0; z-index: 50; box-shadow: 0 2px 10px rgba(0,0,0,.35); }
+/* camera selector: lives in the sticky top row, so the selected camera is always visible and selectable */
+.cam-bar { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cam-bar .cam-label { font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.cam-bar select { background: var(--bg); border: 1px solid var(--accent); color: var(--text); border-radius: 6px; padding: 6px 10px; font-size: 14px; font-weight: 600; min-width: 170px; }
+.cam-bar .cam-state { font-size: 12px; color: var(--muted); }
+@media (max-width: 600px) {
+  header { padding: 10px 14px; }
+  .cam-bar { margin-left: 0; width: 100%; }
+  .cam-bar select { flex: 1; min-width: 0; }
+}
 header h1 { font-size: 18px; font-weight: 600; }
 header .sub { color: var(--muted); font-size: 12px; }
 main { max-width: 1100px; margin: 0 auto; padding: 20px; display: flex; flex-direction: column; gap: 20px; }
@@ -144,16 +155,15 @@ button:disabled { opacity: .35; cursor: not-allowed; }
     <h1>🎥 Timelapse Vezérlő</h1>
     <div class="sub" id="last-refresh">Frissítés...</div>
   </div>
+  <!-- Camera selector (sticky top row): drives the preview, the controls, the videos and the status cards -->
+  <div class="cam-bar">
+    <span class="cam-label">📷 Kamera</span>
+    <select id="camera-select" onchange="onCameraChange()"></select>
+    <span id="camera-state" class="cam-state"></span>
+  </div>
 </header>
 
 <main>
-
-  <!-- Camera selector: drives the preview, the controls, the videos and the status cards -->
-  <div class="card" style="padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-    <span style="font-size:12px;color:var(--muted);font-weight:600;letter-spacing:.04em;text-transform:uppercase">📷 Kamera</span>
-    <select id="camera-select" onchange="onCameraChange()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:13px" style="min-width:170px"></select>
-    <span id="camera-state" style="font-size:12px;color:var(--muted)"></span>
-  </div>
 
   <!-- Status cards -->
   <div class="status-grid">
