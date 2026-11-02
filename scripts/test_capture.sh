@@ -1,6 +1,6 @@
 #!/bin/bash
-# Teszt: 10 kép 1 másodpercenként, időablak bypass
-FRAME_DIR="/tmp/timelapse_frames"
+# Teszt: 10 kép 1 másodpercenként, időablak bypass (az USB kamerával, a saját tesztmappájába)
+FRAME_DIR="/tmp/timelapse_test_frames"
 mkdir -p "$FRAME_DIR"
 rm -f "$FRAME_DIR"/*.jpg
 

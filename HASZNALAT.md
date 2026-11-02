@@ -397,15 +397,47 @@ A webes felületek leállíthatók anélkül, hogy a timelapse felvétel megszak
 
 ---
 
+## Kamerák (USB webkamera és IP kamera)
+
+A rendszer több kamerát kezel, **mindegyik külön, egyszerre rögzít**, saját időablakkal, intervallummal, beállításokkal, ramdisk mappával és videókkal:
+
+- **USB** – a közvetlenül csatlakoztatott webkamera. Mindig megvan, nem törölhető, de átnevezhető.
+- **IP kamerák** – RTSP-n elérhető kamerák (pl. iCSee / Xiongmai), névvel felvehetők.
+
+A weboldal tetején a **📷 Kamera** legördülő választja ki, melyik kamera adatait látod és melyiket vezérlik a gombok (Indítás/Leállítás, Rögzítési beállítások, Preview, Videók, Render, Master, Képrögzítés előtti parancs). A kiválasztás megmarad a böngészőben.
+
+**IP kamera felvétele:** *Rendszerbeállítások → 📷 Kamerák → Új IP kamera*: név (betű/szám/-/_), IP cím, port (554), felhasználó, jelszó. A **🔌 Kapcsolat próba** kiírja a fő- és az alstream kodekét, felbontását és sebességét. Az alapértelmezett RTSP cím iCSee/Xiongmai kamerához való (`Haladó: RTSP címek`: más márkához átírható, helyettesítők: `{host}` `{port}` `{user}` `{password}`). Az IP cím fixálásához érdemes DHCP-foglalást adni a routerben.
+
+**Rögzítési beállítások kamerára** (Vezérlés kártya, összecsukható): kezdés/befejezés, intervallum, képfelbontás (`native` = a kamera mérete), JPEG minőség, eldobott képkockák (csak USB), időbélyeg ki/be és mérete, a videó felbontása (`native` vagy pl. `1920x1080`), fps, CRF és kódolási sebesség. A **Képrögzítés előtti parancs** is kamerára külön állítható (a ventilátor kamerára külön lehet más). A kezdés, a befejezés és az intervallum futó timelapse-nál azonnal érvényes. Az **Indítás** ablakban megadott értékek a kamera mentett beállításai lesznek.
+
+**Tárolás:**
+
+| Mit | Hol |
+|---|---|
+| Képek | `/tmp/timelapse_frames/<kamera>/` (ramdisk) |
+| Napi videók | `<tár>/archive/<kamera>/YYYY-MM-DD.mp4` |
+| Master | `<tár>/<kamera>_master.mp4` |
+| Manuális renderek | `<tár>/renders/<kamera>/` |
+
+Kamera törlésekor a képei és a videói a lemezen maradnak. Átnevezéskor a mappák és a master átnevezése automatikus (futó timelapse-nál előbb állítsd le).
+
+**IP kamera előnézete:** a *Preview indítás* az alstreamből élő képet mutat (kb. 5 kép/mp), a kiszolgáló csak a megnyitott oldal alatt dekódol. Az USB kamera előnézete továbbra is az `ustreamer` (:8081).
+
+**Hiba esetén:** ha egy kamera képrögzítése 3 egymás utáni próbára sikertelen, a **Hibanapló** kap egy bejegyzést (és email megy, ha az *Kamera: a képrögzítés ismételten sikertelen* esemény be van kapcsolva); nyugtázásig ugyanez nem ismétlődik. Az IP kamera képéből ~4 mp alatt készül a kocka, a kamerák párhuzamosan rögzítenek, így egy lassú kamera nem tartja fel a többit.
+
+Parancssorból: `start_timelapse.sh --camera Garden`, `stop_timelapse.sh --camera Garden` (vagy `--all`), `render_now.sh --camera Garden`, `compile_daily.sh --camera Garden`, `build_master.sh --camera Garden`. Kamera megadása nélkül az USB kamerára vonatkoznak (a `compile_daily.sh` minden kamerára). A kamerák listája: `python3 /home/orangepi/timelapse/scripts/cameras.py names`.
+
+---
+
 ## Mikor készül a videó?
 
-A videó **a rögzítési ablak vége után 1 perccel** készül el automatikusan (a `compile_check.sh` percenként ellenőriz). Ez ugyanígy működik az éjfélen átnyúló (pl. 22:00–06:00, 08:00–00:00) és az egy napon belüli (pl. 06:00–20:00) ablaknál is.
+A videó **a rögzítési ablak vége után 1 perccel** készül el automatikusan (a `compile_check.sh` percenként ellenőriz, **kamerára külön**). Ez ugyanígy működik az éjfélen átnyúló (pl. 22:00–06:00, 08:00–00:00) és az egy napon belüli (pl. 06:00–20:00) ablaknál is.
 
-- **A videó neve az ablak kezdő napja** (`YYYY-MM-DD.mp4`). A 22:00–06:00-s éjszaka egyetlen videó, az esti indulás napjának nevével; az éjfél utáni képek is ebbe kerülnek.
+- **A videó neve az ablak kezdő napja** (`archive/<kamera>/YYYY-MM-DD.mp4`). A 22:00–06:00-s éjszaka egyetlen videó, az esti indulás napjának nevével; az éjfél utáni képek is ebbe kerülnek.
 - **Amíg az ablak tart, a képek a ramdisken maradnak.** Csak a **sikeres** összefűzés és mentés után törlődnek, és pontosan azok, amelyekből a videó készült.
 - Ha az összefűzés sikertelen, a képek megmaradnak; a rendszer legfeljebb 3-szor próbálja újra automatikusan, 20 percenként, és e-mail riasztást küld (ha be van kapcsolva).
 - A szenzoradatok mentése külön fut, naponta 00:05-kor (`sensor_backup.sh`), a videótól függetlenül.
-- Az ablak a futó munkamenet beállítása (`/tmp/timelapse_session.conf`), leállítás után az utolsó mentett munkamenet ablaka. Ellenőrzés: `python3 /home/orangepi/timelapse/scripts/session_days.py window` (esedékes napok: `... due`).
+- Az ablak a futó munkamenet beállítása (`/tmp/timelapse_session_<kamera>.conf`), leállítás után az utolsó mentett munkamenet ablaka. Ellenőrzés: `python3 /home/orangepi/timelapse/scripts/session_days.py window --camera <kamera>` (esedékes napok: `... due --camera <kamera>`).
 
 A webes **📅 Napi compile** gomb (és a `compile_daily.sh` paraméter nélkül) csak az **már lezárult ablakú** napokat fűzi össze. Ha nincs ilyen, megmondja, hogy még nem esedékes (a folyamatban lévő nap képeihez nem nyúl).
 
@@ -420,10 +452,10 @@ Ha nem akarsz várni az ablak végére és az automatikus összefűzésre:
 /home/orangepi/timelapse/scripts/render_now.sh
 
 # Renderelés egyéni kimeneti fájlnévvel
-/home/orangepi/timelapse/scripts/render_now.sh --output /mnt/timelapse/archive/sajat_nev.mp4
+/home/orangepi/timelapse/scripts/render_now.sh --camera USB --output /mnt/timelapse/renders/sajat_nev.mp4
 ```
 
-A ramdisken (`/tmp/timelapse_frames/`) lévő összes képet feldolgozza. A képek a renderelés után **megmaradnak** – csak a sikeres napi összefűzés (`compile_daily.sh`) törli őket.
+A kamera ramdisken (`/tmp/timelapse_frames/<kamera>/`) lévő összes képét feldolgozza (`--camera <kamera>`, alapból az USB kamera). A képek a renderelés után **megmaradnak** – csak a sikeres napi összefűzés (`compile_daily.sh`) törli őket.
 
 ---
 

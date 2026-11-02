@@ -1,12 +1,11 @@
 #!/bin/bash
 # =============================================================================
-# post_boot_restore.sh – Boot utáni session visszaállítás
+# post_boot_restore.sh – Boot utáni session visszaállítás (kamerákra külön)
 # Systemd: timelapse-restore.service futtatja boot után
 # =============================================================================
 
 SCRIPT_DIR="/home/orangepi/timelapse/scripts"
 PRE_REBOOT_STATE="/home/orangepi/timelapse/pre_reboot_state.json"
-LAST_SESSION="/home/orangepi/timelapse/last_session.json"
 TIMELAPSE_CONFIG="/home/orangepi/timelapse/timelapse_config.json"
 LOG="/home/orangepi/timelapse/logs/restore.log"
 USB_MOUNT="/mnt/timelapse"
@@ -33,6 +32,13 @@ except Exception:
 "
 }
 
+# ── Mit kell visszaállítani? ──────────────────────────────────────────────────
+# Az első sor a forrás (pre_reboot = tervezett reboot, last_session = áramszünet), utána
+# soronként egy kamera: név<TAB>kezdet<TAB>vég<TAB>intervallum<TAB>tár
+PLAN=$(python3 "${SCRIPT_DIR}/cameras.py" restore-plan)
+PLAN_SOURCE=$(echo "$PLAN" | head -1)
+PLAN_CAMS=$(echo "$PLAN" | tail -n +2)
+
 # ── Indulás értesítés: minden bootnál (a levelet csak akkor küldi ki az email_dispatcher, ha van internet) ─
 BOOT_REASON="normál indulás"
 if [ -f "$PRE_REBOOT_STATE" ]; then
@@ -40,54 +46,29 @@ if [ -f "$PRE_REBOOT_STATE" ]; then
         shutdown) BOOT_REASON="biztonságos leállítás után" ;;
         *)        BOOT_REASON="tervezett újraindítás után" ;;
     esac
-elif [ -f "$LAST_SESSION" ]; then
-    case "$(read_json_field "$LAST_SESSION" active)" in
-        True|true) BOOT_REASON="váratlan leállás (áramszünet?) után" ;;
-    esac
+elif [ "$PLAN_SOURCE" = "last_session" ]; then
+    BOOT_REASON="váratlan leállás (áramszünet?) után"
 fi
 log "Indulás oka: ${BOOT_REASON}"
 send_alert boot "Rendszer elindult" \
     "Az Orange Pi elindult (${BOOT_REASON}). Rendszer: $(hostname)"
 
 # ── Forrás meghatározása: tervezett reboot vagy áramszünet utáni visszaállítás ─
-STATE_FILE=""
-STATE_SOURCE=""
-
-if [ -f "$PRE_REBOOT_STATE" ]; then
-    STATE_FILE="$PRE_REBOOT_STATE"
+if [ "$PLAN_SOURCE" = "pre_reboot" ]; then
     STATE_SOURCE="tervezett reboot (pre_reboot_state.json)"
-elif [ -f "$LAST_SESSION" ]; then
-    # Áramszünet eset: csak akkor állítjuk vissza, ha aktív volt
-    WAS_ACTIVE=$(read_json_field "$LAST_SESSION" active)
-    if [ "$WAS_ACTIVE" = "True" ] || [ "$WAS_ACTIVE" = "true" ]; then
-        STATE_FILE="$LAST_SESSION"
-        STATE_SOURCE="áramszünet utáni visszaállítás (last_session.json)"
-        log "Áramszünet detektálva – last_session.json alapján visszaállítás"
-        send_alert power_restored "Timelapse áramszünet után visszaállva" \
-            "Áramszünet vagy váratlan leállás után a timelapse automatikusan visszaállt a mentett paraméterekkel. Rendszer: $(hostname)"
-    else
-        log "Nincs visszaállítani való (last_session.json active=false) – normál boot"
-        exit 0
-    fi
+elif [ "$PLAN_SOURCE" = "last_session" ]; then
+    # Áramszünet eset: csak akkor állítjuk vissza, ha valamelyik kamera aktív volt
+    STATE_SOURCE="áramszünet utáni visszaállítás (last_session_<kamera>.json)"
+    log "Áramszünet detektálva – a mentett munkamenetek alapján visszaállítás"
+    send_alert power_restored "Timelapse áramszünet után visszaállva" \
+        "Áramszünet vagy váratlan leállás után a timelapse automatikusan visszaállt a mentett paraméterekkel. Rendszer: $(hostname)"
 else
-    log "Nincs pre_reboot_state.json és last_session.json sem – normál boot, kihagyva"
+    log "Nincs pre_reboot_state.json, és egyik kamera sem volt aktív – normál boot"
     exit 0
 fi
 
 log "${STATE_SOURCE} – visszaállítás kezdődik"
-
-TL_ACTIVE=$(read_json_field "$STATE_FILE" timelapse_active)
-SESSION_START=$(read_json_field "$STATE_FILE" session_start)
-SESSION_END=$(read_json_field "$STATE_FILE" session_end)
-SESSION_INTERVAL=$(read_json_field "$STATE_FILE" session_interval)
-SESSION_STORAGE=$(read_json_field "$STATE_FILE" session_storage)
-
-# last_session.json-ból az active mező neve "active", nem "timelapse_active"
-if [ -z "$TL_ACTIVE" ]; then
-    TL_ACTIVE=$(read_json_field "$STATE_FILE" active)
-fi
-
-log "Mentett állapot: timelapse_active=$TL_ACTIVE, start=$SESSION_START, end=$SESSION_END, interval=$SESSION_INTERVAL, storage=$SESSION_STORAGE"
+log "Visszaállítandó kamerák: $(echo "$PLAN_CAMS" | cut -f1 | tr '\n' ' ')"
 
 # ── USB mount ellenőrzés (retry) ─────────────────────────────────────────────
 USB_OK=false
@@ -130,28 +111,35 @@ print("last_reboot_date frissítve: $TODAY")
 PYEOF
 log "timelapse_config.json frissítve (last_reboot_date=$TODAY)"
 
-# ── Timelapse újraindítása ha aktív volt ─────────────────────────────────────
-if [ "$TL_ACTIVE" = "True" ] || [ "$TL_ACTIVE" = "true" ]; then
-    log "Timelapse újraindítása a mentett paraméterekkel..."
+# ── Timelapse újraindítása azoknál a kameráknál, amelyek aktívak voltak ───────
+if [ -n "$PLAN_CAMS" ]; then
+    while IFS=$'\t' read -r CAMN SESSION_START SESSION_END SESSION_INTERVAL SESSION_STORAGE; do
+        [ -z "$CAMN" ] && continue
+        for v in SESSION_START SESSION_END SESSION_INTERVAL SESSION_STORAGE; do
+            [ "${!v}" = "-" ] && printf -v "$v" ''
+        done
+        log "[$CAMN] Mentett állapot: start=$SESSION_START, end=$SESSION_END, interval=$SESSION_INTERVAL, storage=$SESSION_STORAGE"
+        log "[$CAMN] Timelapse újraindítása a mentett paraméterekkel..."
 
-    ARGS=()
-    [ -n "$SESSION_START" ]    && ARGS+=(--start    "$SESSION_START")
-    [ -n "$SESSION_END" ]      && ARGS+=(--end      "$SESSION_END")
-    [ -n "$SESSION_INTERVAL" ] && ARGS+=(--interval "$SESSION_INTERVAL")
-    ARGS+=(--storage "$RESTORE_STORAGE")
+        ARGS=(--camera "$CAMN")
+        [ -n "$SESSION_START" ]    && ARGS+=(--start    "$SESSION_START")
+        [ -n "$SESSION_END" ]      && ARGS+=(--end      "$SESSION_END")
+        [ -n "$SESSION_INTERVAL" ] && ARGS+=(--interval "$SESSION_INTERVAL")
+        ARGS+=(--storage "$RESTORE_STORAGE")
 
-    log "Indítás: bash start_timelapse.sh ${ARGS[*]}"
-    bash "${SCRIPT_DIR}/start_timelapse.sh" "${ARGS[@]}" >> "$LOG" 2>&1
+        log "Indítás: bash start_timelapse.sh ${ARGS[*]}"
+        bash "${SCRIPT_DIR}/start_timelapse.sh" "${ARGS[@]}" >> "$LOG" 2>&1
 
-    if [ $? -eq 0 ]; then
-        log "Timelapse sikeresen újraindítva"
-    else
-        log "ERROR: timelapse újraindítás sikertelen"
-        send_alert restart_failed "Timelapse újraindítás hiba" \
-            "Boot után a timelapse automatikus újraindítása sikertelen. Kézi beavatkozás szükséges. Rendszer: $(hostname)"
-    fi
+        if [ $? -eq 0 ]; then
+            log "[$CAMN] Timelapse sikeresen újraindítva"
+        else
+            log "ERROR: [$CAMN] timelapse újraindítás sikertelen"
+            send_alert restart_failed "$CAMN: timelapse újraindítás hiba" \
+                "Boot után a(z) $CAMN kamera timelapse-ának automatikus újraindítása sikertelen. Kézi beavatkozás szükséges. Rendszer: $(hostname)"
+        fi
+    done <<< "$PLAN_CAMS"
 else
-    log "Timelapse nem volt aktív leállás előtt – nem indítjuk újra"
+    log "Egyik timelapse sem volt aktív leállás előtt – nem indítjuk újra"
 fi
 
 # ── Takarítás ────────────────────────────────────────────────────────────────
@@ -159,5 +147,5 @@ if [ -f "$PRE_REBOOT_STATE" ]; then
     rm -f "$PRE_REBOOT_STATE"
     log "pre_reboot_state.json törölve"
 fi
-# last_session.json marad – a következő stop_timelapse.sh írja active=false-ra
+# a last_session_<kamera>.json fájlok maradnak – a következő stop_timelapse.sh írja active=false-ra
 log "=== Visszaállítás kész ==="

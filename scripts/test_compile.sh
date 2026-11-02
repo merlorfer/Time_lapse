@@ -1,7 +1,8 @@
 #!/bin/bash
-# Teszt: a /tmp/timelapse_frames/-ben lévő képekből videót készít
-FRAME_DIR="/tmp/timelapse_frames"
-OUTPUT="/mnt/timelapse/archive/test_$(date +%Y-%m-%d_%H%M%S).mp4"
+# Teszt: a /tmp/timelapse_test_frames/-ben lévő (test_capture.sh) képekből videót készít
+FRAME_DIR="/tmp/timelapse_test_frames"
+OUTPUT="/mnt/timelapse/renders/test_$(date +%Y-%m-%d_%H%M%S).mp4"
+mkdir -p /mnt/timelapse/renders
 
 FFMPEG_INPUT=$(mktemp)
 ls "$FRAME_DIR/"*.jpg 2>/dev/null | sort | while IFS= read -r f; do

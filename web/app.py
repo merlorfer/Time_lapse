@@ -29,8 +29,9 @@ sys.path.insert(0, SCRIPT_DIR)
 import alert_lib  # shared with send_alert.py / email_dispatcher.py
 import unit_errors  # error journal written by unit_watch.py
 import precapture  # command before each frame (shared with capture.sh)
+import cameras  # camera registry: USB webcam + IP cameras
 LOG_DIR           = "/home/orangepi/timelapse/logs"
-FRAME_DIR         = "/tmp/timelapse_frames"
+FRAMES_ROOT       = cameras.FRAMES_ROOT
 SENSOR_RAM_DIR    = "/tmp/sensor_data"
 SERIAL_LOG_FILE   = "/tmp/esp32_serial.log"
 TIMELAPSE_CONFIG  = "/home/orangepi/timelapse/timelapse_config.json"
@@ -41,6 +42,8 @@ HOST              = "0.0.0.0"
 
 # Device path: /dev/sda, /dev/sda1, /dev/sdab2 — only USB block devices
 _DEV_RE = re.compile(r"^/dev/sd[a-z]{1,3}\d?$")
+
+CAMERA_SCRIPTS = {"start_timelapse", "stop_timelapse", "render_now", "compile_daily", "build_master"}
 
 ALLOWED_SCRIPTS = {
     "start_timelapse", "stop_timelapse",
@@ -68,7 +71,6 @@ _CONFIG_DEFAULTS = {
     "serial_enabled":      True,
     "sensor_sources":      {},
     "email_events":        {},     # event id -> bool; missing = enabled
-    "precapture":          {"enabled": False, "lead_sec": 10, "target": "UART", "cmd": "", "end_cmd": ""},
 }
 
 # ── Sensor sources (UART via esp32_proxy on :8083 + WiFi gateway units) ───────
@@ -245,11 +247,15 @@ def load_system_config() -> dict:
     return cfg
 
 def save_system_config(data: dict):
-    tmp = TIMELAPSE_CONFIG + ".tmp"
-    os.makedirs(os.path.dirname(TIMELAPSE_CONFIG), exist_ok=True)
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(tmp, TIMELAPSE_CONFIG)
+    """Write the whole config. The camera list is edited only through cameras.py, so the
+    version on disk wins: a settings save can never overwrite a concurrent camera edit."""
+    def replace(cfg):
+        cams = cfg.get("cameras")
+        cfg.clear()
+        cfg.update(data)
+        if cams is not None:
+            cfg["cameras"] = cams
+    cameras.update_config(replace)
 
 def _next_reboot_date(cfg: dict) -> str:
     last = cfg.get("last_reboot_date", "")
@@ -315,18 +321,12 @@ def get_storage_info() -> dict:
     }
 
 def _update_session_storage(new_base: str):
-    """Update VIDEO_BASE paths in the active session conf."""
-    session_conf = "/tmp/timelapse_session.conf"
-    if not os.path.isfile(session_conf):
-        return
-    archive = new_base + "/archive"
-    master  = new_base + "/master.mp4"
-    for pattern in [
-        (r"VIDEO_BASE=.*",   f'VIDEO_BASE="{new_base}"'),
-        (r"ARCHIVE_DIR=.*",  f'ARCHIVE_DIR="{archive}"'),
-        (r"MASTER_VIDEO=.*", f'MASTER_VIDEO="{master}"'),
-    ]:
-        subprocess.run(["sed", "-i", f"s|{pattern[0]}|{pattern[1]}|", session_conf],
+    """Point every running camera session at the new storage (VIDEO_BASE in its conf)."""
+    for c in cameras.get_cameras():
+        session_conf = cameras.paths(c["name"])["session_conf"]
+        if not os.path.isfile(session_conf):
+            continue
+        subprocess.run(["sed", "-i", f's|^VIDEO_BASE=.*|VIDEO_BASE="{new_base}"|', session_conf],
                        capture_output=True)
 
 # ── Parameter validators ────────────────────────────────────────────────────
@@ -336,6 +336,9 @@ _PATH = re.compile(r"^[/\w\-_.]+$")
 
 def build_args(script: str, params: dict) -> list[str]:
     args = []
+    cam = str(params.get("camera", "")).strip()
+    if script in CAMERA_SCRIPTS and cam and cameras.NAME_RE.match(cam) and cameras.get_camera(cam):
+        args += ["--camera", cam]
     if script == "start_timelapse":
         if "start"    in params and _TIME.match(params["start"]):
             args += ["--start", params["start"]]
@@ -360,15 +363,16 @@ def build_args(script: str, params: dict) -> list[str]:
 
 # ── Video base helper ────────────────────────────────────────────────────────
 def get_video_base() -> str:
-    # Check session override first
-    session_conf = "/tmp/timelapse_session.conf"
-    if os.path.isfile(session_conf):
-        with open(session_conf) as f:
-            for line in f:
-                if line.startswith("VIDEO_BASE="):
-                    val = line.strip().split("=", 1)[1].strip('"\'')
-                    if val:
-                        return val
+    # A running (or last started) camera session decides the storage
+    for c in cameras.get_cameras():
+        session_conf = cameras.paths(c["name"])["session_conf"]
+        if os.path.isfile(session_conf):
+            with open(session_conf) as f:
+                for line in f:
+                    if line.startswith("VIDEO_BASE="):
+                        val = line.strip().split("=", 1)[1].strip('"\'')
+                        if val:
+                            return val
     # Auto-detect: USB pendrive preferred, SD fallback
     usb = "/mnt/timelapse"
     if os.path.ismount(usb) and os.path.isdir(usb):
@@ -382,20 +386,24 @@ def get_video_base() -> str:
             pass
     return "/home/orangepi/timelapse/videos"
 
-def get_videos() -> dict:
+def get_videos(camera: str = "") -> dict:
+    cam = cameras.get_camera(camera)
+    if cam is None:
+        return {"archive": [], "renders": [], "master": None, "camera": camera, "error": "ismeretlen kamera"}
+    name = cam["name"]
     video_base   = get_video_base()
-    archive_dir  = os.path.join(video_base, "archive")
-    renders_dir  = os.path.join(video_base, "renders")
+    archive_dir  = os.path.join(video_base, "archive", name)
+    renders_dir  = os.path.join(video_base, "renders", name)
 
     def list_dir(directory: str, pattern: str) -> list:
         videos = []
         if not os.path.isdir(directory):
             return videos
-        for name in sorted(glob.glob(os.path.join(directory, pattern)), reverse=True):
+        for fn in sorted(glob.glob(os.path.join(directory, pattern)), reverse=True):
             try:
-                st = os.stat(name)
+                st = os.stat(fn)
                 videos.append({
-                    "name":  os.path.basename(name),
+                    "name":  os.path.basename(fn),
                     "size":  st.st_size,
                     "mtime": int(st.st_mtime),
                 })
@@ -403,17 +411,18 @@ def get_videos() -> dict:
                 pass
         return videos
 
-    # master.mp4 külön
+    # <kamera>_master.mp4 külön
     master = None
-    master_path = os.path.join(video_base, "master.mp4")
+    master_path = os.path.join(video_base, f"{name}_master.mp4")
     if os.path.isfile(master_path):
         try:
             st = os.stat(master_path)
-            master = {"name": "master.mp4", "size": st.st_size, "mtime": int(st.st_mtime)}
+            master = {"name": f"{name}_master.mp4", "size": st.st_size, "mtime": int(st.st_mtime)}
         except Exception:
             pass
 
     return {
+        "camera":  name,
         "archive": list_dir(archive_dir, "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].mp4"),
         "renders": list_dir(renders_dir, "*.mp4"),
         "master":  master,
@@ -596,30 +605,27 @@ def _run_join(archive: str, names: list, out_path: str, out_name: str, requested
                 pass
 
 # ── Pre-capture command (fan off before a frame, on after) ───────────────────
-def current_interval() -> int:
-    """Seconds between frames of the running (or last) timelapse session."""
+def current_interval(camera: str = "") -> int:
+    """Seconds between frames of the camera's running (or last) timelapse session."""
+    cam = cameras.get_camera(camera)
+    if cam is None:
+        return 60
+    p = cameras.paths(cam["name"])
     try:
-        with open("/tmp/timelapse_session.conf") as f:
+        with open(p["session_conf"]) as f:
             m = re.search(r'^CAPTURE_INTERVAL="?(\d+)"?', f.read(), re.M)
             if m:
                 return int(m.group(1))
     except OSError:
         pass
     try:
-        with open("/home/orangepi/timelapse/last_session.json") as f:
+        with open(p["last_session"]) as f:
             v = int(json.load(f).get("session_interval", 0))
             if v > 0:
                 return v
     except (OSError, ValueError, TypeError):
         pass
-    try:
-        with open(os.path.join(SCRIPT_DIR, "config.sh")) as f:
-            m = re.search(r'^CAPTURE_INTERVAL=(\d+)', f.read(), re.M)
-            if m:
-                return int(m.group(1))
-    except OSError:
-        pass
-    return 60
+    return int(cam["interval"])
 
 # ── Sensor data helpers ───────────────────────────────────────────────────────
 
@@ -677,18 +683,50 @@ def get_sensor_data(from_date: str, to_date: str) -> dict:
 
 
 # ── Status helper ────────────────────────────────────────────────────────────
-def get_status() -> dict:
-    # Timelapse active?
-    tl_active  = os.path.exists("/tmp/timelapse_active")
-    started_at = ""
-    if tl_active:
-        try:
-            with open("/tmp/timelapse_active") as f:
-                started_at = f.read().strip()
-        except Exception:
-            pass
+# ── Cameras ──────────────────────────────────────────────────────────────────
+def public_camera(c: dict) -> dict:
+    """A camera entry without its password."""
+    out = {k: v for k, v in c.items() if k != "password"}
+    out["password_set"] = bool(c.get("password"))
+    return out
 
-    # Preview active?
+
+def read_session(name: str) -> dict:
+    session = {"start": "", "end": "", "interval": "", "storage": ""}
+    key_map = {"CAPTURE_START": "start", "CAPTURE_END": "end",
+               "CAPTURE_INTERVAL": "interval", "VIDEO_BASE": "storage"}
+    try:
+        with open(cameras.paths(name)["session_conf"]) as f:
+            for line in f:
+                for k, v in key_map.items():
+                    if line.startswith(k + "="):
+                        session[v] = line.strip().split("=", 1)[1].strip('"\'')
+    except OSError:
+        pass
+    return session
+
+
+def camera_status(c: dict) -> dict:
+    p = cameras.paths(c["name"])
+    active = os.path.exists(p["active_flag"])
+    started_at = ""
+    if active:
+        try:
+            with open(p["active_flag"]) as f:
+                started_at = f.read().strip()
+        except OSError:
+            pass
+    return {"type": c["type"], "active": active, "started_at": started_at,
+            "frame_count": len(glob.glob(os.path.join(p["frame_dir"], "*.jpg"))),
+            "session": read_session(c["name"])}
+
+
+def get_status() -> dict:
+    cams = {c["name"]: camera_status(c) for c in cameras.get_cameras()}
+    default = cameras.default_name()
+    main = cams.get(default, {})
+
+    # USB camera preview (ustreamer) active?
     preview_active = False
     pidfile = "/tmp/timelapse_preview.pid"
     if os.path.exists(pidfile):
@@ -700,14 +738,11 @@ def get_status() -> dict:
         except Exception:
             pass
 
-    # Frame count
-    frame_count = len(glob.glob(f"{FRAME_DIR}/*.jpg"))
-
     # Disk usage (SD root)
     disk_sd = {}
     try:
         r = subprocess.run(["df", "-h", "/"], capture_output=True, text=True)
-        p = r.stdout.strip().split("\n")[1].split()
+        p = r.stdout.strip().split(chr(10))[1].split()
         disk_sd = {"total": p[1], "used": p[2], "free": p[3], "pct": p[4]}
     except Exception:
         pass
@@ -718,27 +753,8 @@ def get_status() -> dict:
     if usb_ok:
         try:
             r = subprocess.run(["df", "-h", "/mnt/timelapse"], capture_output=True, text=True)
-            p = r.stdout.strip().split("\n")[1].split()
+            p = r.stdout.strip().split(chr(10))[1].split()
             disk_usb = {"total": p[1], "used": p[2], "free": p[3], "pct": p[4]}
-        except Exception:
-            pass
-
-    # Active session parameters
-    session = {"start": "", "end": "", "interval": "", "storage": ""}
-    session_conf = "/tmp/timelapse_session.conf"
-    if os.path.isfile(session_conf):
-        key_map = {
-            "CAPTURE_START":    "start",
-            "CAPTURE_END":      "end",
-            "CAPTURE_INTERVAL": "interval",
-            "VIDEO_BASE":       "storage",
-        }
-        try:
-            with open(session_conf) as f:
-                for line in f:
-                    for k, v in key_map.items():
-                        if line.startswith(k + "="):
-                            session[v] = line.strip().split("=", 1)[1].strip('"\'')
         except Exception:
             pass
 
@@ -749,14 +765,17 @@ def get_status() -> dict:
     last_reboot_date  = cfg.get("last_reboot_date", "")
 
     return {
-        "timelapse_active": tl_active,
-        "started_at":       started_at,
+        "cameras":          cams,
+        "default_camera":   default,
+        # the USB camera's values stay at the top level for older clients
+        "timelapse_active": main.get("active", False),
+        "started_at":       main.get("started_at", ""),
+        "frame_count":      main.get("frame_count", 0),
+        "session":          main.get("session", {}),
         "preview_active":   preview_active,
-        "frame_count":      frame_count,
         "disk_sd":          disk_sd,
         "usb_ok":           usb_ok,
         "disk_usb":         disk_usb,
-        "session":          session,
         "reboot_scheduled": reboot_scheduled,
         "next_reboot_date": next_reboot_date,
         "last_reboot_date": last_reboot_date,
@@ -778,7 +797,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/status":
             self._send_json(get_status())
         elif path == "/api/videos":
-            self._send_json(get_videos())
+            qs = parse_qs(parsed.query)
+            self._send_json(get_videos(qs.get("camera", [""])[0]))
+        elif path == "/api/cameras":
+            self._serve_cameras()
+        elif path == "/api/camera-preview":
+            self._camera_preview(parse_qs(parsed.query).get("camera", [""])[0])
+        elif path == "/api/camera-snapshot":
+            self._camera_snapshot(parse_qs(parsed.query).get("camera", [""])[0])
         elif path == "/api/logs":
             qs       = parse_qs(parsed.query)
             log_type = qs.get("type", ["capture"])[0]
@@ -815,7 +841,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/units/scan":
             self._send_json({"devices": scan_network()})
         elif path == "/api/precapture":
-            self._serve_precapture()
+            self._serve_precapture(parse_qs(parsed.query).get("camera", [""])[0])
         elif path == "/api/unit-errors":
             entries = unit_errors.list_entries()
             self._send_json({"entries": entries,
@@ -833,7 +859,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             else {"archive": [], "joined": [], "error": "ismeretlen mappa"})
         elif path == "/api/backup/join-status":
             self._send_json(join_status())
-        elif path.startswith("/archive/") or path.startswith("/renders/") or path == "/master.mp4" \
+        elif path.startswith("/archive/") or path.startswith("/renders/") or path.startswith("/master/") \
                 or path.startswith("/backup/"):
             self._serve_video(path)
         else:
@@ -864,6 +890,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._add_unit(body)
         elif parsed.path == "/api/units/remove":
             self._remove_unit(body)
+        elif parsed.path == "/api/cameras":
+            self._add_camera(body)
+        elif parsed.path == "/api/cameras/update":
+            self._update_camera(body)
+        elif parsed.path == "/api/cameras/remove":
+            self._remove_camera(body)
+        elif parsed.path == "/api/cameras/test":
+            self._test_camera(body)
         elif parsed.path == "/api/precapture":
             self._save_precapture(body)
         elif parsed.path == "/api/precapture/test":
@@ -904,25 +938,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _serve_video(self, url_path: str):
         video_base = get_video_base()
         # Map URL path to filesystem path safely
-        if url_path == "/master.mp4":
-            filepath = os.path.join(video_base, "master.mp4")
+        if url_path.startswith("/master/"):
+            # /master/<camera>.mp4  ->  <video_base>/<camera>_master.mp4
+            cam = url_path[len("/master/"):]
+            if cam.endswith(".mp4"):
+                cam = cam[:-4]
+            if not cameras.NAME_RE.match(cam):
+                self.send_error(404)
+                return
+            filepath = os.path.join(video_base, f"{cam}_master.mp4")
         elif url_path.startswith("/backup/"):
             filepath = resolve_backup_file(url_path)
             if filepath is None:
                 self.send_error(404)
                 return
         else:
-            # /archive/name.mp4 or /renders/name.mp4
-            parts = url_path.lstrip("/").split("/", 1)
-            if len(parts) != 2 or parts[0] not in ("archive", "renders"):
+            # /archive/<camera>/name.mp4 or /renders/<camera>/name.mp4
+            parts = url_path.lstrip("/").split("/")
+            if len(parts) != 3 or parts[0] not in ("archive", "renders"):
                 self.send_error(404)
                 return
-            subdir, filename = parts
+            subdir, cam, filename = parts
             # Reject path traversal
-            if ".." in filename or "/" in filename:
+            if not cameras.NAME_RE.match(cam) or ".." in filename or "/" in filename:
                 self.send_error(403)
                 return
-            filepath = os.path.join(video_base, subdir, filename)
+            filepath = os.path.join(video_base, subdir, cam, filename)
 
         if not os.path.isfile(filepath):
             self.send_error(404)
@@ -1311,24 +1352,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
         restart_unit_forward()
         self._send_json({"ok": True})
 
-    def _serve_precapture(self):
-        pc = precapture.get_cfg()
+    def _serve_precapture(self, camera: str = ""):
+        cam = cameras.get_camera(camera)
+        if cam is None:
+            self._send_json({"ok": False, "error": "Ismeretlen kamera"})
+            return
+        name = cam["name"]
+        pc = precapture.get_cfg(name)
         status = {}
         try:
-            with open(precapture.STATUS_FILE) as f:
+            with open(precapture.status_file(name)) as f:
                 status = json.load(f)
         except Exception:
             pass
         pending = {}
         try:
-            with open(precapture.PENDING_FILE) as f:
+            with open(precapture.pending_file(name)) as f:
                 pending = json.load(f)
         except Exception:
             pass
-        self._send_json({"cfg": pc, "max_lead": current_interval(), "status": status,
+        self._send_json({"camera": name, "cfg": pc, "max_lead": current_interval(name), "status": status,
                          "pending_since": pending.get("started") if pending.get("end_cmd") else None})
 
     def _save_precapture(self, body: dict):
+        cam = cameras.get_camera(str(body.get("camera", "")).strip())
+        if cam is None:
+            self._send_json({"ok": False, "error": "Ismeretlen kamera"})
+            return
         cfg = load_system_config()
         sources = {UART_SOURCE_KEY} | {u["name"] for u in cfg.get("units", [])}
         target = str(body.get("target", UART_SOURCE_KEY)).strip()
@@ -1339,7 +1389,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (ValueError, TypeError):
             self._send_json({"ok": False, "error": "A másodperc érték nem szám"})
             return
-        max_lead = current_interval()
+        max_lead = current_interval(cam["name"])
         if target not in sources:
             self._send_json({"ok": False, "error": "Ismeretlen egység"})
             return
@@ -1351,11 +1401,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if len(t) > 120 or any(ord(c) < 32 for c in t):
                 self._send_json({"ok": False, "error": "A parancs legfeljebb 120 karakter, egy sor lehet"})
                 return
-        cfg["precapture"] = {"enabled": bool(body.get("enabled", False)), "lead_sec": lead,
-                             "target": target, "cmd": cmd, "end_cmd": end_cmd}
+        pc = {"enabled": bool(body.get("enabled", False)), "lead_sec": lead,
+              "target": target, "cmd": cmd, "end_cmd": end_cmd}
         try:
-            save_system_config(cfg)
-            self._send_json({"ok": True})
+            ok, err = cameras.update_camera(cam["name"], {"precapture": pc})
+            self._send_json({"ok": ok, "error": err})
         except Exception as e:
             self._send_json({"ok": False, "error": str(e)})
 
@@ -1363,13 +1413,157 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # Sends the given command right now using the form values (no need to save first).
         target = str(body.get("target", UART_SOURCE_KEY)).strip()
         cmd = str(body.get("cmd", "")).strip()
+        cam = cameras.get_camera(str(body.get("camera", "")).strip())
         phase = "test_end" if body.get("phase") == "end" else "test_start"
         if not cmd:
             self._send_json({"ok": False, "message": "Üres parancs, nincs mit küldeni"})
             return
         ok, msg, secs = precapture.send_command(target, cmd)
-        precapture.record(phase, ok, msg, secs, cmd)
+        precapture.record(phase, ok, msg, secs, cmd, cam["name"] if cam else "")
         self._send_json({"ok": ok, "message": msg, "secs": secs})
+
+    # ── cameras ──────────────────────────────────────────────────────────────
+    def _serve_cameras(self):
+        out = []
+        for c in cameras.get_cameras():
+            d = public_camera(c)
+            d.update(camera_status(c))
+            out.append(d)
+        self._send_json({"cameras": out, "default": cameras.default_name()})
+
+    def _add_camera(self, body: dict):
+        ok, err = cameras.add_ip_camera(body)
+        self._send_json({"ok": ok, "error": err})
+
+    def _update_camera(self, body: dict):
+        ok, err = cameras.update_camera(str(body.get("name", "")), body)
+        self._send_json({"ok": ok, "error": err})
+
+    def _remove_camera(self, body: dict):
+        ok, err = cameras.remove_camera(str(body.get("name", "")))
+        self._send_json({"ok": ok, "error": err})
+
+    @staticmethod
+    def _scrub(text: str, cam: dict) -> str:
+        """Never show the camera password (RTSP errors echo the URL)."""
+        from urllib.parse import quote
+        pw = str(cam.get("password", ""))
+        for variant in {pw, quote(pw, safe="")}:
+            if variant:
+                text = text.replace(variant, "***")
+        return text
+
+    @staticmethod
+    def _probe_stream(url: str) -> dict:
+        t0 = time.time()
+        try:
+            r = subprocess.run(["ffprobe", "-v", "error", "-rtsp_transport", "tcp", "-select_streams", "v:0",
+                                "-show_entries", "stream=codec_name,width,height,r_frame_rate", "-of", "json", url],
+                               capture_output=True, text=True, timeout=25)
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "Időtúllépés (a kamera nem válaszol)"}
+        if r.returncode != 0:
+            return {"ok": False, "error": (r.stderr.strip().splitlines() or ["ismeretlen hiba"])[-1][:200]}
+        try:
+            st = json.loads(r.stdout)["streams"][0]
+        except (ValueError, KeyError, IndexError):
+            return {"ok": False, "error": "A stream nem tartalmaz képet"}
+        return {"ok": True, "codec": st.get("codec_name"), "width": st.get("width"),
+                "height": st.get("height"), "fps": st.get("r_frame_rate"), "secs": round(time.time() - t0, 1)}
+
+    def _test_camera(self, body: dict):
+        """Connection test of an IP camera: saved (name) and/or form values (host, user, ...)."""
+        saved = cameras.get_camera(str(body.get("name", "")).strip()) if body.get("name") else None
+        if saved is not None and saved["type"] != "ip":
+            self._send_json({"ok": False, "error": "Csak IP kamerát lehet így tesztelni"})
+            return
+        conn, err = cameras._validate_conn(body, require_host=saved is None)
+        if err:
+            self._send_json({"ok": False, "error": err})
+            return
+        cam = cameras.normalize(dict(saved or {"name": "teszt", "type": "ip"}, **conn))
+        result = {"ok": True}
+        for which in ("main", "sub"):
+            info = self._probe_stream(cameras.rtsp_url(cam, which))
+            if info.get("error"):
+                info["error"] = self._scrub(info["error"], cam)
+            result[which] = info
+            result["ok"] = result["ok"] and info["ok"]
+        self._send_json(result)
+
+    _preview_lock = threading.Lock()
+    _preview_count = 0
+    PREVIEW_MAX = 3
+
+    def _camera_preview(self, name: str):
+        """Live MJPEG preview of an IP camera from its sub stream (one ffmpeg per viewer)."""
+        cam = cameras.get_camera(name)
+        if cam is None or cam["type"] != "ip":
+            self.send_error(404)
+            return
+        with Handler._preview_lock:
+            if Handler._preview_count >= Handler.PREVIEW_MAX:
+                self.send_error(503, "Túl sok egyidejű előnézet")
+                return
+            Handler._preview_count += 1
+        proc = None
+        try:
+            proc = subprocess.Popen(
+                ["ffmpeg", "-v", "error", "-rtsp_transport", "tcp", "-i", cameras.rtsp_url(cam, "sub"),
+                 "-an", "-vf", "fps=5", "-q:v", "7", "-f", "mpjpeg", "-boundary_tag", "frame", "-"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            self.send_response(200)
+            self.send_header("Content-Type", "multipart/x-mixed-replace;boundary=frame")
+            self.send_header("Cache-Control", "no-cache, no-store")
+            self.end_headers()
+            while True:
+                chunk = proc.stdout.read(16384)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            if proc is not None:
+                proc.kill()
+                proc.wait()
+            with Handler._preview_lock:
+                Handler._preview_count -= 1
+
+    def _camera_snapshot(self, name: str):
+        """One JPEG: an IP camera's sub stream, or the running USB preview (ustreamer)."""
+        cam = cameras.get_camera(name)
+        if cam is None:
+            self.send_error(404)
+            return
+        data = b""
+        if cam["type"] == "ip":
+            try:
+                r = subprocess.run(["ffmpeg", "-v", "error", "-rtsp_transport", "tcp", "-i",
+                                    cameras.rtsp_url(cam, "sub"), "-frames:v", "1", "-q:v", "4",
+                                    "-f", "mjpeg", "-"], capture_output=True, timeout=25)
+                data = r.stdout
+            except subprocess.TimeoutExpired:
+                pass
+        else:
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", 8081, timeout=5)
+                conn.request("GET", "/snapshot")
+                resp = conn.getresponse()
+                if resp.status == 200:
+                    data = resp.read()
+                conn.close()
+            except Exception:
+                pass
+        if not data:
+            self.send_error(502, "Nincs kép")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", len(data))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
 
     def _serve_email_events(self):
         cfg = load_system_config()
@@ -1417,6 +1611,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json({"ok": False, "output": f"Script nem található: {script_path}"})
             return
 
+        if script == "start_timelapse":
+            # the values typed in the start dialog become the camera's saved settings
+            cam_name = str(params.get("camera", "")).strip() or cameras.default_name()
+            typed = {k: params[k] for k in ("start", "end", "interval") if params.get(k) not in (None, "")}
+            clean, err = cameras.validate_settings(typed)
+            if err:
+                self._send_json({"ok": False, "output": err})
+                return
+            if clean and cameras.get_camera(cam_name):
+                cameras.update_camera(cam_name, {"settings": clean})
         args = build_args(script, params)
         cmd  = ["bash", script_path] + args
 

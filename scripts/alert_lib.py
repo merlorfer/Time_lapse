@@ -46,6 +46,7 @@ EVENTS = [
     ("unit_rule_log",       "Egység: a rules saját hibaüzenete (log \"szöveg\" művelet)"),
     ("unit_reboot",         "Egység: a CLCode01 újraindult"),
     ("unit_unreachable",    "Egység: nem érhető el"),
+    ("camera_error",        "Kamera: a képrögzítés ismételten sikertelen"),
 ]
 EVENT_IDS = {e[0] for e in EVENTS}
 EVENT_LABELS = dict(EVENTS)

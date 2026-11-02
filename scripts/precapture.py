@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
 precapture.py – control command before each timelapse frame, closing command after.
+Every camera has its own setting (cameras.py: camera["precapture"]), pending marker,
+status and alert throttle; the CLI takes --camera NAME (default: the USB camera).
 
 Use case: a fan next to the camera shakes the scene, so it is switched off a
 few seconds before the frame and on again afterwards.
 
 CLI (called by capture.sh, always exits 0 so it can never break a capture):
-    precapture.py start [--max-lead SEC]   send the command, then wait the lead time
-    precapture.py end                      send the closing command
+    precapture.py start [--camera NAME] [--max-lead SEC]   send the command, then wait the lead time
+    precapture.py end   [--camera NAME]                    send the closing command
 
 The command is a rules-engine action ("off Fan", "on Fan", "set var3 1", ...) sent
 to POST /api/rules/exec of the chosen unit over loopback: the serial unit through
@@ -29,10 +31,9 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import alert_lib  # noqa: E402
+import cameras  # noqa: E402
 
-PENDING_FILE = "/home/orangepi/timelapse/precapture_pending.json"
-ALERT_STATE  = "/home/orangepi/timelapse/precapture_alert.json"
-STATUS_FILE  = "/tmp/precapture_status.json"
+TL_DIR       = cameras.TL_DIR
 UART_PORT    = 8083
 UART_KEY     = "UART"
 CMD_TIMEOUT  = 20.0
@@ -61,9 +62,21 @@ def _write_json(path: str, data: dict):
     os.replace(tmp, path)
 
 
-def get_cfg() -> dict:
-    cfg = alert_lib.load_config()
-    pc = cfg.get("precapture") or {}
+def pending_file(camera: str = "") -> str:
+    return f"{TL_DIR}/precapture_pending_{camera or cameras.default_name()}.json"
+
+
+def alert_state_file(camera: str = "") -> str:
+    return f"{TL_DIR}/precapture_alert_{camera or cameras.default_name()}.json"
+
+
+def status_file(camera: str = "") -> str:
+    return f"/tmp/precapture_status_{camera or cameras.default_name()}.json"
+
+
+def get_cfg(camera: str = "") -> dict:
+    cam = cameras.get_camera(camera)
+    pc = (cam or {}).get("precapture") or {}
     return {
         "enabled": bool(pc.get("enabled", False)),
         "lead_sec": max(0, int(pc.get("lead_sec", 0) or 0)),
@@ -116,32 +129,33 @@ def send_command(target: str, cmd: str, timeout: float = CMD_TIMEOUT) -> tuple:
     return ok, msg, round(time.time() - t0, 2)
 
 
-def record(phase: str, ok: bool, msg: str, secs: float, cmd: str = ""):
-    st = _read_json(STATUS_FILE)
+def record(phase: str, ok: bool, msg: str, secs: float, cmd: str = "", camera: str = ""):
+    st = _read_json(status_file(camera))
     st[phase] = {"ts": time.time(), "ok": ok, "message": msg, "secs": secs, "cmd": cmd}
     try:
-        _write_json(STATUS_FILE, st)
+        _write_json(status_file(camera), st)
     except OSError:
         pass
 
 
-def _alert_end_failed(p: dict, msg: str):
-    state = _read_json(ALERT_STATE)
+def _alert_end_failed(p: dict, msg: str, camera: str = ""):
+    state = _read_json(alert_state_file(camera))
     if time.time() - state.get("last", 0) < ALERT_MIN_GAP:
         return
     try:
-        _write_json(ALERT_STATE, {"last": time.time()})
+        _write_json(alert_state_file(camera), {"last": time.time()})
     except OSError:
         pass
+    cam = camera or cameras.default_name()
     alert_lib.enqueue(
         "precapture_end_failed",
-        "A képrögzítés utáni lezáró parancs sikertelen",
-        f"A(z) '{p.get('end_cmd', '')}' lezáró parancs ({p.get('target', '')}) nem ment ki a "
+        f"{cam}: a képrögzítés utáni lezáró parancs sikertelen",
+        f"Kamera: {cam}. A(z) '{p.get('end_cmd', '')}' lezáró parancs ({p.get('target', '')}) nem ment ki a "
         f"képrögzítés után: {msg}. A vezérelt eszköz (pl. a ventilátor) kikapcsolva maradhatott! "
         f"Rendszer: {os.uname().nodename}")
 
 
-def _finish(p: dict, attempts: int) -> bool:
+def _finish(p: dict, attempts: int, camera: str = "") -> bool:
     """Send the pending closing command; the marker is removed only on success."""
     ok, msg, secs = False, "", 0.0
     for i in range(attempts):
@@ -151,27 +165,27 @@ def _finish(p: dict, attempts: int) -> bool:
         log(f"lezáró parancs sikertelen ({i + 1}/{attempts}): {msg}")
         if i < attempts - 1:
             time.sleep(END_BACKOFF[min(i, len(END_BACKOFF) - 1)])
-    record("end", ok, msg, secs, p.get("end_cmd", ""))
+    record("end", ok, msg, secs, p.get("end_cmd", ""), camera)
     if ok:
         try:
-            os.remove(PENDING_FILE)
+            os.remove(pending_file(camera))
         except OSError:
             pass
         log(f"lezáró parancs elküldve: '{p.get('end_cmd')}' → {p.get('target')} ({secs}s)")
     else:
-        _alert_end_failed(p, msg)
+        _alert_end_failed(p, msg, camera)
     return ok
 
 
-def start(max_lead: int = 0):
-    pc = get_cfg()
+def start(max_lead: int = 0, camera: str = ""):
+    pc = get_cfg(camera)
     if not pc["enabled"]:
         return
 
-    leftover = _read_json(PENDING_FILE)
+    leftover = _read_json(pending_file(camera))
     if leftover.get("end_cmd"):
         log("az előző ciklus lezáró parancsa nem ment ki, újrapróbálom")
-        _finish(leftover, attempts=1)
+        _finish(leftover, attempts=1, camera=camera)
 
     if not pc["cmd"] and not pc["end_cmd"]:
         return
@@ -182,13 +196,13 @@ def start(max_lead: int = 0):
         lead = max_lead
 
     if pc["end_cmd"]:
-        _write_json(PENDING_FILE, {"target": pc["target"], "end_cmd": pc["end_cmd"],
-                                   "started": time.time()})
+        _write_json(pending_file(camera), {"target": pc["target"], "end_cmd": pc["end_cmd"],
+                                           "started": time.time()})
     if not pc["cmd"]:
         return
 
     ok, msg, secs = send_command(pc["target"], pc["cmd"])
-    record("start", ok, msg, secs, pc["cmd"])
+    record("start", ok, msg, secs, pc["cmd"], camera)
     if not ok:
         log(f"előzetes parancs sikertelen, a kép így is elkészül: {msg}")
         return
@@ -197,14 +211,20 @@ def start(max_lead: int = 0):
         time.sleep(lead)
 
 
-def end():
-    p = _read_json(PENDING_FILE)
+def end(camera: str = ""):
+    p = _read_json(pending_file(camera))
     if p.get("end_cmd"):
-        _finish(p, attempts=END_ATTEMPTS)
+        _finish(p, attempts=END_ATTEMPTS, camera=camera)
 
 
 if __name__ == "__main__":
     action = sys.argv[1] if len(sys.argv) > 1 else ""
+    cam = ""
+    if "--camera" in sys.argv:
+        try:
+            cam = sys.argv[sys.argv.index("--camera") + 1]
+        except IndexError:
+            cam = ""
     try:
         if action == "start":
             ml = 0
@@ -213,11 +233,11 @@ if __name__ == "__main__":
                     ml = int(sys.argv[sys.argv.index("--max-lead") + 1])
                 except (IndexError, ValueError):
                     ml = 0
-            start(ml)
+            start(ml, cam)
         elif action == "end":
-            end()
+            end(cam)
         else:
-            print("Használat: precapture.py start [--max-lead SEC] | end", file=sys.stderr)
+            print("Használat: precapture.py start|end [--camera NAME] [--max-lead SEC]", file=sys.stderr)
     except Exception as exc:   # never let this break a capture
         log(f"hiba: {exc!r}")
     sys.exit(0)

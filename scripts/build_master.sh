@@ -1,30 +1,30 @@
 #!/bin/bash
 # =============================================================================
-# build_master.sh – Master videó újraépítése archív szegmensekből
-# Használat: build_master.sh [--days N]
-#   --days N  : csak az utolsó N nap szegmenseit fűzi össze (0 = összes)
+# build_master.sh – Egy kamera master videójának újraépítése az archív szegmensekből
+# Használat: build_master.sh [--camera NÉV] [--days N]
+#   --camera K : melyik kamera (alapért.: az USB kamera); kimenet: <tár>/<kamera>_master.mp4
+#   --days N   : csak az utolsó N nap szegmenseit fűzi össze (0 = összes)
 # =============================================================================
 
 source "$(dirname "$0")/config.sh"
 
 DAYS=0
+CAMERA_ARG=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --days) DAYS="$2"; shift 2 ;;
+        --camera) CAMERA_ARG="$2"; shift 2 ;;
         *) shift ;;
     esac
 done
 
-# Session conf felülírja a config.sh VIDEO_BASE értékét
-if [ -f /tmp/timelapse_session.conf ]; then
-    SESSION_BASE=$(grep "^VIDEO_BASE=" /tmp/timelapse_session.conf | cut -d'"' -f2)
-    [ -n "$SESSION_BASE" ] && VIDEO_BASE="$SESSION_BASE"
-fi
+# A munkamenet VIDEO_BASE értéke felülírja a config.sh értékét (load_camera)
+load_camera "$CAMERA_ARG" || exit 1
 
-ARCHIVE_DIR="${VIDEO_BASE}/archive"
-MASTER="${VIDEO_BASE}/master.mp4"
-MASTER_TMP="${VIDEO_BASE}/master_tmp.mp4"
+MASTER="$MASTER_VIDEO"
+MASTER_TMP="${VIDEO_BASE}/${CAM}_master_tmp.mp4"
 
+echo "Kamera:          ${CAM}"
 echo "Archív könyvtár: ${ARCHIVE_DIR}"
 echo "Kimeneti fájl:   ${MASTER}"
 

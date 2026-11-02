@@ -15,6 +15,9 @@ timelapse is still running; frames of a session that has not ended yet are
 never touched. Frames stay on the RAM disk until compile_daily.sh has saved
 the video successfully and deleted exactly the frames it used.
 
+Every camera has its own session (frames, window, attempts): pass --camera NAME
+(default: the USB camera).
+
 Commands (used by compile_check.sh / compile_daily.sh):
     due [--grace SEC]     session days that are ready, oldest first
     frames DAY            frame paths of that session day, in time order
@@ -30,6 +33,9 @@ import os
 import re
 import sys
 from datetime import date, datetime, time as dtime, timedelta
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import cameras
 
 FRAME_DIR = "/tmp/timelapse_frames"
 SESSION_CONF = "/tmp/timelapse_session.conf"
@@ -50,8 +56,9 @@ def _conf_value(path: str, key: str):
         return None
 
 
-def get_window() -> tuple:
-    """(start, end) as 'HH:MM': running session, else the last saved one, else defaults."""
+def get_window(default: tuple = None) -> tuple:
+    """(start, end) as 'HH:MM': running session, else the last saved one, else the camera's
+    saved settings (default), else config.sh."""
     s, e = _conf_value(SESSION_CONF, "CAPTURE_START"), _conf_value(SESSION_CONF, "CAPTURE_END")
     if s and e:
         return s, e
@@ -63,6 +70,8 @@ def get_window() -> tuple:
             return d["session_start"], d["session_end"]
     except (OSError, ValueError):
         pass
+    if default:
+        return default
     return (_conf_value(CONFIG_SH, "CAPTURE_START") or "06:00",
             _conf_value(CONFIG_SH, "CAPTURE_END") or "20:00")
 
@@ -119,8 +128,9 @@ def _attempt_allowed(day: str, state_file: str, now_ts: float) -> bool:
 
 
 def main(argv: list) -> int:
-    opts = {"--now": None, "--frame-dir": FRAME_DIR, "--window": None, "--state": STATE_FILE,
-            "--grace": "60"}
+    global SESSION_CONF, LAST_SESSION
+    opts = {"--now": None, "--frame-dir": None, "--window": None, "--state": None,
+            "--grace": "60", "--camera": ""}
     rest, i = [], 0
     while i < len(argv):
         if argv[i] in opts and i + 1 < len(argv):
@@ -134,10 +144,19 @@ def main(argv: list) -> int:
         return 1
     cmd = rest[0]
 
+    cam = cameras.get_camera(opts["--camera"])
+    if cam is None:
+        print(f"Ismeretlen kamera: {opts['--camera']}", file=sys.stderr)
+        return 2
+    p = cameras.paths(cam["name"])
+    SESSION_CONF, LAST_SESSION = p["session_conf"], p["last_session"]
+    opts["--frame-dir"] = opts["--frame-dir"] or p["frame_dir"]
+    opts["--state"] = opts["--state"] or p["compile_attempts"]
+
     if opts["--window"]:
         start, end = opts["--window"].split("-")
     else:
-        start, end = get_window()
+        start, end = get_window((cam["start"], cam["end"]))
     now = datetime.strptime(opts["--now"], "%Y-%m-%d %H:%M") if opts["--now"] else datetime.now()
 
     if cmd == "window":

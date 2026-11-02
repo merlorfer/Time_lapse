@@ -15,11 +15,11 @@ amely hozzáfűződik egy kumulatív master videóhoz.
 [C920 /dev/video0]
       │ percenként (cron)
       ▼
-/tmp/timelapse_frames/        ← tmpfs ramdisk (elvész reboot-nál – elfogadott)
+/tmp/timelapse_frames/<kamera>/  ← tmpfs ramdisk (elvész reboot-nál – elfogadott)
 
-[compile_check cron, percenként] ─ az ablak vége +1 perc ─→ /mnt/timelapse/archive/YYYY-MM-DD.mp4
+[compile_check cron, percenként] ─ az ablak vége +1 perc ─→ /mnt/timelapse/archive/<kamera>/YYYY-MM-DD.mp4
                                  (a név az ablak kezdő napja; a képek sikeres mentés után törlődnek)
-                                 + master.mp4 újraépítés (concat)
+                                 + <kamera>_master.mp4 újraépítés (concat)
 
 [Python HTTP server :8080]  ←── /mnt/timelapse/  (USB, vagy SD fallback)
 ```
@@ -32,7 +32,8 @@ amely hozzáfűződik egy kumulatív master videóhoz.
 scripts/
 ├── config.sh            ← közös konfiguráció (időablak, útvonalak, ffmpeg params)
 ├── capture.sh           ← fswebcam, percenként, csak ha aktív + időablakban
-├── compile_check.sh     ← percenként: az ablak vége után 1 perccel indítja a compile-t
+├── cameras.py           ← kamerák nyilvántartása (USB + IP/RTSP), kameránkénti útvonalak és beállítások
+├── compile_check.sh     ← percenként: az ablak vége után 1 perccel indítja a compile-t (kamerákra külön)
 ├── compile_daily.sh     ← egy munkamenet videója + master concat (--day YYYY-MM-DD)
 ├── session_days.py      ← melyik kép melyik munkamenet-naphoz tartozik, mikor esedékes
 ├── render_now.sh        ← azonnali renderelés a ramdisken lévő képekből
@@ -63,8 +64,8 @@ systemd/
 
 | Adat | Hely | Típus |
 |---|---|---|
-| Nyers képek | `/tmp/timelapse_frames/` | tmpfs (RAM) |
-| Napi videók + master | `/mnt/timelapse/` | USB pendrive/SSD (elsődleges) |
+| Nyers képek | `/tmp/timelapse_frames/<kamera>/` | tmpfs (RAM) |
+| Napi videók (`archive/<kamera>/`) + `<kamera>_master.mp4` | `/mnt/timelapse/` | USB pendrive/SSD (elsődleges) |
 | Fallback | `/home/orangepi/timelapse/videos/` | SD kártya |
 
 A scriptek automatikusan detektálják, hogy `/mnt/timelapse/` elérhető-e.
@@ -147,7 +148,7 @@ tail -f /home/orangepi/timelapse/logs/capture.log
 | `--storage PATH` | Videók mentési helye | auto (USB vagy SD fallback) |
 
 **Hogyan működik:**
-- `start_timelapse.sh` létrehoz egy `/tmp/timelapse_active` flag fájlt és egy `/tmp/timelapse_session.conf` fájlt a session paramétereivel
+- `start_timelapse.sh [--camera NÉV]` létrehoz egy `/tmp/timelapse_active_<kamera>` flag fájlt és egy `/tmp/timelapse_session_<kamera>.conf` fájlt a session paramétereivel (a kamerák egymástól függetlenül, párhuzamosan rögzítenek; lásd HASZNALAT.md: *Kamerák*)
 - A cron percenként futtatja a `capture.sh`-t, de az csak akkor rögzít, ha a flag fájl létezik **és** az aktuális idő az időablakon belül van
 - `stop_timelapse.sh` törli a flag fájlt → a következő cron futás már nem rögzít
 - Reboot után a `/tmp` tmpfs ürül, tehát a rögzítés automatikusan **nem** indul újra

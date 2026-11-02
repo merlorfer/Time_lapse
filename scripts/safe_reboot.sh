@@ -1,13 +1,12 @@
 #!/bin/bash
 # =============================================================================
 # safe_reboot.sh – Adatok mentése, majd újraindítás
-# Menti a ramdisken lévő képkockákat és szenzor adatokat, majd rebootol.
+# Menti a ramdisken lévő képkockákat (kamerákra külön) és a szenzor adatokat, majd rebootol.
 # SAFE_ACTION=poweroff környezeti változóval leállít (lásd safe_shutdown.sh).
 # =============================================================================
 
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 source "$SCRIPT_DIR/config.sh"
-[ -f /tmp/timelapse_session.conf ] && source /tmp/timelapse_session.conf
 
 ACTION="${SAFE_ACTION:-reboot}"   # reboot | poweroff
 LOG="${LOG_DIR}/safe_reboot.log"
@@ -16,23 +15,30 @@ mkdir -p "$LOG_DIR"
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" | tee -a "$LOG"; }
 
 log "=== safe_reboot.sh indítva ==="
-log "VIDEO_BASE: $VIDEO_BASE"
+load_camera "" || exit 1
+BASE_MAIN="$VIDEO_BASE"        # a szenzor adatok és a naplók helye (az USB kamera munkamenetéé)
+log "VIDEO_BASE: $BASE_MAIN"
 
-# ── 1. Képkockák mentése ─────────────────────────────────────────────────────
-FRAME_COUNT=$(ls "$FRAME_DIR/"*.jpg 2>/dev/null | wc -l)
-if [ "$FRAME_COUNT" -gt 0 ]; then
-    BACKUP_DIR="${VIDEO_BASE}/frames_backup_$(date '+%Y-%m-%d_%H%M%S')"
-    mkdir -p "$BACKUP_DIR"
-    cp "$FRAME_DIR/"*.jpg "$BACKUP_DIR/"
-    COPIED=$(ls "$BACKUP_DIR/"*.jpg 2>/dev/null | wc -l)
-    log "Képkockák mentve: $COPIED / $FRAME_COUNT → $BACKUP_DIR"
-else
-    log "Nincs képkocka a ramdisken – kihagyva"
-fi
+CAMERAS=$(python3 "$SCRIPT_DIR/cameras.py" names)
+
+# ── 1. Képkockák mentése (kameránként) ───────────────────────────────────────
+for CAMN in $CAMERAS; do
+    load_camera "$CAMN" || continue
+    FRAME_COUNT=$(ls "$FRAME_DIR/"*.jpg 2>/dev/null | wc -l)
+    if [ "$FRAME_COUNT" -gt 0 ]; then
+        BACKUP_DIR="${VIDEO_BASE}/frames_backup_${CAM}_$(date '+%Y-%m-%d_%H%M%S')"
+        mkdir -p "$BACKUP_DIR"
+        cp "$FRAME_DIR/"*.jpg "$BACKUP_DIR/"
+        COPIED=$(ls "$BACKUP_DIR/"*.jpg 2>/dev/null | wc -l)
+        log "[$CAM] Képkockák mentve: $COPIED / $FRAME_COUNT → $BACKUP_DIR"
+    else
+        log "[$CAM] Nincs képkocka a ramdisken – kihagyva"
+    fi
+done
 
 # ── 2. Szenzor adatok mentése ────────────────────────────────────────────────
 SENSOR_RAM_DIR="/tmp/sensor_data"
-SENSOR_ARCHIVE_DIR="$VIDEO_BASE/sensor_data"
+SENSOR_ARCHIVE_DIR="$BASE_MAIN/sensor_data"
 
 if [ -d "$SENSOR_RAM_DIR" ]; then
     for DAY_DIR in "$SENSOR_RAM_DIR"/*/; do
@@ -48,44 +54,51 @@ else
     log "Nincs szenzor adat – kihagyva"
 fi
 
-# ── 3. Session conf mentése ──────────────────────────────────────────────────
-if [ -f /tmp/timelapse_session.conf ]; then
-    cp /tmp/timelapse_session.conf "$VIDEO_BASE/timelapse_session_backup.conf"
-    log "Session conf mentve → $VIDEO_BASE/timelapse_session_backup.conf"
-fi
+# ── 3. Session confok mentése ────────────────────────────────────────────────
+for CAMN in $CAMERAS; do
+    load_camera "$CAMN" nosession || continue
+    if [ -f "$SESSION_CONF" ]; then
+        cp "$SESSION_CONF" "$BASE_MAIN/timelapse_session_backup_${CAM}.conf"
+        log "[$CAM] Session conf mentve → $BASE_MAIN/timelapse_session_backup_${CAM}.conf"
+    fi
+done
 
-# ── 4. Pre-reboot state mentése visszaállításhoz ─────────────────────────────
+# ── 4. Pre-reboot state mentése visszaállításhoz (kameránként) ───────────────
 PRE_REBOOT_STATE="/home/orangepi/timelapse/pre_reboot_state.json"
+REBOOT_REASON="$([ "$ACTION" = poweroff ] && echo shutdown || echo scheduled)"
 
-TL_ACTIVE=false
-SESSION_START=""
-SESSION_END=""
-SESSION_INTERVAL=""
-SESSION_STORAGE=""
+SCRIPT_DIR="$SCRIPT_DIR" PRE_REBOOT_STATE="$PRE_REBOOT_STATE" REBOOT_REASON="$REBOOT_REASON" python3 - <<'PYEOF'
+import json, os, re, sys
+from datetime import datetime
 
-if [ -f /tmp/timelapse_active ]; then
-    TL_ACTIVE=true
-fi
+sys.path.insert(0, os.environ["SCRIPT_DIR"])
+import cameras
 
-if [ -f /tmp/timelapse_session.conf ]; then
-    SESSION_START=$(grep   '^CAPTURE_START='   /tmp/timelapse_session.conf | cut -d= -f2 | tr -d '"' || echo "")
-    SESSION_END=$(grep     '^CAPTURE_END='     /tmp/timelapse_session.conf | cut -d= -f2 | tr -d '"' || echo "")
-    SESSION_INTERVAL=$(grep '^CAPTURE_INTERVAL=' /tmp/timelapse_session.conf | cut -d= -f2 | tr -d '"' || echo "")
-    SESSION_STORAGE=$(grep '^VIDEO_BASE='      /tmp/timelapse_session.conf | cut -d= -f2 | tr -d '"' || echo "")
-fi
-
-cat > "$PRE_REBOOT_STATE" <<EOF
-{
-  "timelapse_active": $TL_ACTIVE,
-  "session_start": "$SESSION_START",
-  "session_end": "$SESSION_END",
-  "session_interval": "$SESSION_INTERVAL",
-  "session_storage": "$SESSION_STORAGE",
-  "reboot_time": "$(date --iso-8601=seconds)",
-  "reboot_reason": "$([ "$ACTION" = poweroff ] && echo shutdown || echo scheduled)"
-}
-EOF
-log "Pre-reboot state mentve → $PRE_REBOOT_STATE (timelapse_active=$TL_ACTIVE)"
+keys = {"CAPTURE_START": "session_start", "CAPTURE_END": "session_end",
+        "CAPTURE_INTERVAL": "session_interval", "VIDEO_BASE": "session_storage"}
+state = {"cameras": {}, "reboot_time": datetime.now().astimezone().isoformat(timespec="seconds"),
+         "reboot_reason": os.environ["REBOOT_REASON"]}
+for cam in cameras.get_cameras():
+    p = cameras.paths(cam["name"])
+    entry = {"timelapse_active": os.path.exists(p["active_flag"]),
+             "session_start": "", "session_end": "", "session_interval": "", "session_storage": ""}
+    try:
+        with open(p["session_conf"]) as f:
+            for line in f:
+                m = re.match(r'^([A-Z_]+)="?([^"\n]*)"?', line)
+                if m and m.group(1) in keys:
+                    entry[keys[m.group(1)]] = m.group(2)
+    except OSError:
+        pass
+    state["cameras"][cam["name"]] = entry
+tmp = os.environ["PRE_REBOOT_STATE"] + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(state, f, indent=2)
+os.replace(tmp, os.environ["PRE_REBOOT_STATE"])
+active = [n for n, e in state["cameras"].items() if e["timelapse_active"]]
+print("aktív kamerák: " + (", ".join(active) if active else "nincs"))
+PYEOF
+log "Pre-reboot state mentve → $PRE_REBOOT_STATE"
 
 # Értesítés a leállítás/újraindítás előtt: ha van internet, kimegy még előtte (max. 20 mp várakozás),
 # egyébként a sorban marad, és a következő bootnál, az eredeti időponttal megy ki.

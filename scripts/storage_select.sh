@@ -10,6 +10,14 @@ CURRENT="${VIDEO_BASE}"
 USB_PATH="/mnt/timelapse"
 SD_PATH="/home/orangepi/timelapse/videos"
 
+# A futó munkamenetek (kamerákra külön confok) tárhelyének átírása
+set_session_storage() {
+    local base="$1" f
+    for f in /tmp/timelapse_session_*.conf; do
+        [ -f "$f" ] && sed -i "s|^VIDEO_BASE=.*|VIDEO_BASE=\"${base}\"|" "$f"
+    done
+}
+
 # --- Státusz összegyűjtése ---
 if mountpoint -q "$USB_PATH" && [ -w "$USB_PATH" ]; then
     USB_TAG="[OK]"
@@ -99,11 +107,7 @@ case "$CHOICE" in
             sudo systemctl restart timelapse-http 2>/dev/null
             # Session konfig frissítése USB-re
             mkdir -p "${USB_PATH}/archive" "${USB_PATH}/renders"
-            if [ -f /tmp/timelapse_session.conf ]; then
-                sed -i "s|VIDEO_BASE=.*|VIDEO_BASE=\"${USB_PATH}\"|" /tmp/timelapse_session.conf
-                sed -i "s|ARCHIVE_DIR=.*|ARCHIVE_DIR=\"${USB_PATH}/archive\"|" /tmp/timelapse_session.conf
-                sed -i "s|MASTER_VIDEO=.*|MASTER_VIDEO=\"${USB_PATH}/master.mp4\"|" /tmp/timelapse_session.conf
-            fi
+            set_session_storage "${USB_PATH}"
             whiptail --title "Siker" --msgbox \
                 "Sikeresen mountolva:\n${DEV_CHOICE} → ${USB_PATH}\nFájlrendszer: ${FS}\nUUID: ${NEW_UUID}\n\nHTTP szerver átváltva USB-re." \
                 11 58
@@ -124,11 +128,7 @@ case "$CHOICE" in
         # Ha a timelapse az USB-t használja, átváltunk SD-re
         if [ "$CURRENT" = "$USB_PATH" ]; then
             mkdir -p "${SD_PATH}/archive"
-            if [ -f /tmp/timelapse_session.conf ]; then
-                sed -i "s|VIDEO_BASE=.*|VIDEO_BASE=\"${SD_PATH}\"|" /tmp/timelapse_session.conf
-                sed -i "s|ARCHIVE_DIR=.*|ARCHIVE_DIR=\"${SD_PATH}/archive\"|" /tmp/timelapse_session.conf
-                sed -i "s|MASTER_VIDEO=.*|MASTER_VIDEO=\"${SD_PATH}/master.mp4\"|" /tmp/timelapse_session.conf
-            fi
+            set_session_storage "${SD_PATH}"
             sudo systemctl restart timelapse-http 2>/dev/null
             SWITCH_MSG="Tárhely átváltva SD kártyára."
         else
@@ -156,11 +156,9 @@ esac
 if [ -n "$NEW_BASE" ] && [ "$NEW_BASE" != "$CURRENT" ]; then
     mkdir -p "${NEW_BASE}/archive"
 
-    if [ -f /tmp/timelapse_session.conf ]; then
-        sed -i "s|VIDEO_BASE=.*|VIDEO_BASE=\"${NEW_BASE}\"|" /tmp/timelapse_session.conf
-        sed -i "s|ARCHIVE_DIR=.*|ARCHIVE_DIR=\"${NEW_BASE}/archive\"|" /tmp/timelapse_session.conf
-        sed -i "s|MASTER_VIDEO=.*|MASTER_VIDEO=\"${NEW_BASE}/master.mp4\"|" /tmp/timelapse_session.conf
-        SESSION_MSG="A futó session is frissítve."
+    if ls /tmp/timelapse_session_*.conf >/dev/null 2>&1; then
+        set_session_storage "${NEW_BASE}"
+        SESSION_MSG="A futó sessionök is frissítve."
     else
         SESSION_MSG="(Nincs futó timelapse session.)"
     fi

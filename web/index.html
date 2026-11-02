@@ -133,6 +133,8 @@ button:disabled { opacity: .35; cursor: not-allowed; }
               cursor:pointer; max-width:100%; box-sizing:border-box; }
 .chart-chip.off { opacity:.35; text-decoration:line-through; }
 .chart-chip i { width:10px; height:10px; border-radius:50%; display:inline-block; }
+.cam-in { padding:5px 8px; font-size:12px; border-radius:4px; border:1px solid var(--border);
+          background:var(--bg); color:var(--text); box-sizing:border-box; }
 </style>
 </head>
 <body>
@@ -146,6 +148,13 @@ button:disabled { opacity: .35; cursor: not-allowed; }
 
 <main>
 
+  <!-- Camera selector: drives the preview, the controls, the videos and the status cards -->
+  <div class="card" style="padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <span style="font-size:12px;color:var(--muted);font-weight:600;letter-spacing:.04em;text-transform:uppercase">📷 Kamera</span>
+    <select id="camera-select" onchange="onCameraChange()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:13px" style="min-width:170px"></select>
+    <span id="camera-state" style="font-size:12px;color:var(--muted)"></span>
+  </div>
+
   <!-- Status cards -->
   <div class="status-grid">
     <div class="stat">
@@ -158,7 +167,7 @@ button:disabled { opacity: .35; cursor: not-allowed; }
       <div class="stat-value" id="pv-status"><span class="dot red"></span>Kikapcsolva</div>
     </div>
     <div class="stat">
-      <div class="stat-label">Rögzített képek</div>
+      <div class="stat-label">Rögzített képek <span class="cam-name" style="text-transform:none"></span></div>
       <div class="stat-value" id="frame-count">–</div>
       <div class="stat-sub">ramdisken</div>
     </div>
@@ -184,7 +193,7 @@ button:disabled { opacity: .35; cursor: not-allowed; }
 
     <!-- Camera preview -->
     <div class="card">
-      <div class="card-title">Kamera preview
+      <div class="card-title">Kamera preview <span class="cam-name" style="text-transform:none;color:var(--text)"></span>
         <button id="fullscreen-btn" onclick="togglePreviewFullscreen()"
           style="float:right;padding:3px 8px;font-size:11px;background:var(--card);
                  border:1px solid var(--border);border-radius:5px;color:var(--muted);cursor:pointer;"
@@ -202,10 +211,41 @@ button:disabled { opacity: .35; cursor: not-allowed; }
     <div class="card">
       <div class="card-title">Vezérlés</div>
       <div style="margin-bottom:14px">
-        <div class="card-title" style="margin-bottom:8px">Timelapse rögzítés</div>
+        <div class="card-title" style="margin-bottom:8px">Timelapse rögzítés <span class="cam-name" style="text-transform:none;color:var(--text)"></span></div>
         <div class="btn-grid">
           <button class="btn-green" onclick="openStartModal()">▶ Indítás</button>
           <button class="btn-red"   onclick="runScript('stop_timelapse')">■ Leállítás</button>
+        </div>
+      </div>
+      <div style="margin-bottom:14px">
+        <button onclick="toggleCamSettingsPanel()" style="background:none;border:none;color:var(--muted);
+                font-size:12px;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;width:100%">
+          <span id="camset-arrow" style="font-size:10px">▶</span>
+          <span style="font-weight:600;letter-spacing:.04em;text-transform:uppercase">Rögzítési beállítások</span>
+          <span class="cam-name" style="margin-left:auto;font-size:11px"></span>
+        </button>
+        <div id="camset-panel" style="display:none;margin-top:10px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div class="form-row"><label>Kezdés</label><input type="time" id="cs-start"></div>
+            <div class="form-row"><label>Befejezés</label><input type="time" id="cs-end"></div>
+            <div class="form-row"><label>Intervallum (mp)</label><input type="number" id="cs-interval" min="1" max="86400"></div>
+            <div class="form-row"><label>JPEG minőség (1–100)</label><input type="number" id="cs-jpeg_quality" min="1" max="100"></div>
+            <div class="form-row"><label>Képfelbontás <span id="cs-res-hint" style="color:var(--muted)"></span></label><input type="text" id="cs-capture_resolution" placeholder="1920x1080"></div>
+            <div class="form-row" id="cs-skip-row"><label>Eldobott képkocka indításkor</label><input type="number" id="cs-camera_skip" min="0" max="60"></div>
+            <div class="form-row"><label>Videó felbontása</label><input type="text" id="cs-video_resolution" placeholder="1920x1080 vagy native"></div>
+            <div class="form-row"><label>Videó fps</label><input type="number" id="cs-fps" min="1" max="120"></div>
+            <div class="form-row"><label>Videó minőség (CRF, kisebb = jobb)</label><input type="number" id="cs-crf" min="0" max="51"></div>
+            <div class="form-row"><label>Kódolás sebessége</label>
+              <select id="cs-preset" style="background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:13px" style="width:100%">
+                <option>ultrafast</option><option>superfast</option><option>veryfast</option><option>faster</option>
+                <option>fast</option><option>medium</option><option>slow</option><option>slower</option><option>veryslow</option>
+              </select></div>
+            <div class="form-row"><label><input type="checkbox" id="cs-overlay" style="width:auto;margin-right:6px">Időbélyeg a képen</label></div>
+            <div class="form-row"><label>Időbélyeg mérete (1080p-re vetítve)</label><input type="number" id="cs-font_size" min="8" max="200"></div>
+          </div>
+          <div class="hint" style="margin-bottom:8px">A <code>native</code> az eredeti képméretet jelenti. A kezdés, a befejezés és az intervallum futó timelapse-nál is azonnal érvényes, a többi a következő képtől.</div>
+          <div class="btn-grid"><button class="btn-green" onclick="saveCamSettings()">💾 Mentés</button></div>
+          <div id="camset-result" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
         </div>
       </div>
       <div style="margin-bottom:14px">
@@ -213,6 +253,7 @@ button:disabled { opacity: .35; cursor: not-allowed; }
                 font-size:12px;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;width:100%">
           <span id="precapture-arrow" style="font-size:10px">▶</span>
           <span style="font-weight:600;letter-spacing:.04em;text-transform:uppercase">Képrögzítés előtti parancs</span>
+          <span class="cam-name" style="font-size:11px"></span>
           <span id="precapture-badge" style="margin-left:auto;font-size:11px"></span>
         </button>
         <div id="precapture-panel" style="display:none;margin-top:10px">
@@ -246,14 +287,14 @@ button:disabled { opacity: .35; cursor: not-allowed; }
         </div>
       </div>
       <div style="margin-bottom:14px">
-        <div class="card-title" style="margin-bottom:8px">Preview stream (:8081)</div>
+        <div class="card-title" style="margin-bottom:8px">Preview stream <span id="preview-title-sub"></span></div>
         <div class="btn-grid">
-          <button class="btn-blue" onclick="runScript('preview_start')">▶ Preview indítás</button>
-          <button class="btn-red"  onclick="runScript('preview_stop')">■ Preview leállítás</button>
+          <button class="btn-blue" onclick="previewStart()">▶ Preview indítás</button>
+          <button class="btn-red"  onclick="previewStop()">■ Preview leállítás</button>
         </div>
       </div>
       <div style="margin-bottom:14px">
-        <div class="card-title" style="margin-bottom:8px">Videó</div>
+        <div class="card-title" style="margin-bottom:8px">Videó <span class="cam-name" style="text-transform:none;color:var(--text)"></span></div>
         <div class="btn-grid">
           <button class="btn-yellow" onclick="openModal('render-modal')">🎬 Render most</button>
           <button class="btn-gray"   onclick="runScript('compile_daily')">📅 Napi compile</button>
@@ -417,6 +458,44 @@ button:disabled { opacity: .35; cursor: not-allowed; }
   <!-- Rendszerbeállítások -->
   <div class="card">
     <div class="card-title">Rendszerbeállítások</div>
+
+    <!-- Kamerák (összecsukható) -->
+    <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
+      <button onclick="toggleCamsPanel()" style="background:none;border:none;color:var(--muted);
+              font-size:12px;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px">
+        <span id="cams-arrow" style="font-size:10px">▶</span>
+        📷 Kamerák
+      </button>
+      <div id="cams-panel" style="display:none;margin-top:14px">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:6px">Az USB webkamera és az IP kamerák (RTSP). Mindegyik külön időablakkal, beállításokkal és videókkal rögzít, egyszerre is.</div>
+        <div id="cams-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">
+          <span style="font-size:12px;color:var(--muted);font-style:italic">Betöltés...</span>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:6px">Új IP kamera hozzáadása:</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+          <input type="text" id="cn-name" placeholder="Név (pl. Garden)" class="cam-in" style="flex:1;min-width:120px">
+          <input type="text" id="cn-host" placeholder="IP cím (pl. 192.168.1.10)" class="cam-in" style="flex:1;min-width:150px">
+          <input type="number" id="cn-port" value="554" min="1" max="65535" class="cam-in" style="width:80px" title="RTSP port">
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+          <input type="text" id="cn-user" value="admin" placeholder="Felhasználó" class="cam-in" style="flex:1;min-width:120px">
+          <input type="password" id="cn-pw" placeholder="Jelszó" autocomplete="new-password" class="cam-in" style="flex:1;min-width:120px">
+        </div>
+        <details style="margin-bottom:8px">
+          <summary style="font-size:11px;color:var(--muted);cursor:pointer">Haladó: RTSP címek</summary>
+          <div style="margin-top:6px;display:flex;flex-direction:column;gap:6px">
+            <input type="text" id="cn-main" class="cam-in" placeholder="Fő stream (üresen: iCSee / Xiongmai)">
+            <input type="text" id="cn-sub" class="cam-in" placeholder="Alstream (az élő előnézethez)">
+            <div class="hint">Helyettesítők: <code>{host}</code> <code>{port}</code> <code>{user}</code> <code>{password}</code>. Alapértelmezett (iCSee/Xiongmai): <code>rtsp://{host}:{port}/user={user}&amp;password={password}&amp;channel=1&amp;stream=0.sdp?real_stream</code> (alstream: <code>stream=1</code>)</div>
+          </div>
+        </details>
+        <div class="btn-grid">
+          <button class="btn-gray" onclick="testCamera(null)">🔌 Kapcsolat próba</button>
+          <button class="btn-blue" onclick="addCamera()">➕ Kamera hozzáadása</button>
+        </div>
+        <div id="cams-result" style="margin-top:8px;font-size:12px;color:var(--muted);white-space:pre-wrap"></div>
+      </div>
+    </div>
 
     <!-- WiFi gateway egységek (összecsukható) -->
     <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
@@ -630,7 +709,7 @@ button:disabled { opacity: .35; cursor: not-allowed; }
 <!-- Modal: Start Timelapse -->
 <div class="overlay" id="start-modal">
   <div class="modal">
-    <h2>▶ Timelapse indítása</h2>
+    <h2 id="start-modal-title">▶ Timelapse indítása</h2>
     <div class="form-row">
       <label>Kezdés időpontja</label>
       <input type="time" id="p-start" value="06:00">
@@ -696,15 +775,17 @@ let serialInterval = null;
 let autoSerial     = false;
 let running        = false;
 let lastStatus     = null;
+let currentCamera  = '';       // selected camera (header dropdown)
+let cameraList     = [];       // /api/cameras
+let ipPreviewOn    = {};       // camera -> live preview requested (IP cameras)
+let previewSrcNow  = '';
 
 // ── Init ────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  refreshStatus();
+  loadCameras();
   loadLog();
-  loadVideos();
   loadSystemConfig();
   loadSerialSources();
-  loadPrecapture();
   loadUnitErrors();
   setInterval(loadUnitErrors, 30000);
   statusInterval = setInterval(refreshStatus, 5000);
@@ -716,36 +797,50 @@ async function refreshStatus() {
     const s = await api('/api/status');
     lastStatus = s;
 
+    // The selected camera (falls back to the top-level values of older servers)
+    const cams = s.cameras || {};
+    if (!currentCamera) currentCamera = s.default_camera || '';
+    const cs = cams[currentCamera] || {active: s.timelapse_active, started_at: s.started_at,
+                                       frame_count: s.frame_count, session: s.session, type: 'usb'};
+    s.cs = cs;
+
     // Timelapse
     const tlEl = document.getElementById('tl-status');
-    if (s.timelapse_active) {
+    if (cs.active) {
       tlEl.innerHTML = '<span class="dot green"></span>Aktív';
     } else {
       tlEl.innerHTML = '<span class="dot red"></span>Inaktív';
     }
+    const others = Object.keys(cams).filter(n => n !== currentCamera && cams[n].active);
     document.getElementById('tl-started').textContent =
-      s.started_at ? 'Indítva: ' + s.started_at : '';
+      (cs.started_at ? 'Indítva: ' + cs.started_at : '') +
+      (others.length ? (cs.started_at ? ' · ' : '') + 'Fut még: ' + others.join(', ') : '');
+    updateCameraState(cams);
 
-    // Preview
+    // Preview: the USB camera through ustreamer (:8081), IP cameras through the sub stream
     const pvEl = document.getElementById('pv-status');
     const imgEl = document.getElementById('preview-img');
     const offEl = document.getElementById('preview-off');
-    if (s.preview_active) {
+    let src = '';
+    if (cs.type === 'ip') {
+      if (ipPreviewOn[currentCamera]) src = `/api/camera-preview?camera=${encodeURIComponent(currentCamera)}`;
+    } else if (s.preview_active) {
+      src = `http://${location.hostname}:8081/stream`;
+    }
+    if (src) {
       pvEl.innerHTML = '<span class="dot green"></span>Él';
-      const host = location.hostname;
-      const src  = `http://${host}:8081/stream`;
-      if (imgEl.src !== src) imgEl.src = src;
+      if (previewSrcNow !== src) { imgEl.src = src; previewSrcNow = src; }
       imgEl.style.display = 'block';
       offEl.style.display  = 'none';
     } else {
       pvEl.innerHTML = '<span class="dot red"></span>Kikapcsolva';
       imgEl.style.display = 'none';
       offEl.style.display  = 'flex';
-      imgEl.src = '';
+      if (previewSrcNow) { imgEl.src = ''; previewSrcNow = ''; }
     }
 
     // Frames
-    document.getElementById('frame-count').textContent = s.frame_count;
+    document.getElementById('frame-count').textContent = cs.frame_count;
 
     // SD disk
     if (s.disk_sd && s.disk_sd.free) {
@@ -790,8 +885,11 @@ async function refreshStatus() {
 }
 
 // ── Script runner ────────────────────────────────────────────────────────────
+const CAMERA_SCRIPTS = ['start_timelapse', 'stop_timelapse', 'render_now', 'compile_daily', 'build_master'];
+
 async function runScript(script, params = {}) {
   if (running) return;
+  if (CAMERA_SCRIPTS.includes(script) && currentCamera) params = Object.assign({camera: currentCamera}, params);
   setOutput('<span class="spinner"></span>Futás: ' + script + '…', false);
   running = true;
   try {
@@ -825,17 +923,18 @@ document.addEventListener('click', e => {
 });
 
 function openStartModal() {
-  // Ha a timelapse aktív, az aktuális session értékeket töltjük be
-  const s = lastStatus && lastStatus.session;
-  if (lastStatus && lastStatus.timelapse_active && s) {
-    if (s.start)    document.getElementById('p-start').value    = s.start;
-    if (s.end)      document.getElementById('p-end').value      = s.end;
-    if (s.interval) document.getElementById('p-interval').value = s.interval;
-    // storage select: csak ha az érték megvan az option-ök között
-    const sel = document.getElementById('p-storage');
-    const exists = Array.from(sel.options).some(o => o.value === s.storage);
-    sel.value = exists ? s.storage : '';
-  }
+  // A kamera mentett beállításai (futó timelapse-nál az aktuális session értékei) töltődnek be
+  const c = curCam() || {};
+  const run = lastStatus && lastStatus.cs && lastStatus.cs.active ? lastStatus.cs.session : null;
+  const s = run || {start: c.start, end: c.end, interval: c.interval, storage: ''};
+  if (s.start)    document.getElementById('p-start').value    = s.start;
+  if (s.end)      document.getElementById('p-end').value      = s.end;
+  if (s.interval) document.getElementById('p-interval').value = s.interval;
+  // storage select: csak ha az érték megvan az option-ök között
+  const sel = document.getElementById('p-storage');
+  const exists = Array.from(sel.options).some(o => o.value === s.storage);
+  sel.value = exists ? s.storage : '';
+  document.getElementById('start-modal-title').textContent = '▶ Timelapse indítása – ' + (currentCamera || '');
   openModal('start-modal');
 }
 
@@ -859,7 +958,7 @@ function submitRender() {
 // ── Video list ───────────────────────────────────────────────────────────────
 async function loadVideos() {
   try {
-    const data = await api('/api/videos');
+    const data = await api('/api/videos?camera=' + encodeURIComponent(currentCamera));
     renderVideoList('archive', data.archive || [], data.master);
     renderVideoList('renders', data.renders || [], null);
   } catch(e) {}
@@ -872,11 +971,11 @@ function renderVideoList(type, videos, master) {
     const wrap = document.getElementById('master-row-wrap');
     if (master) {
       wrap.innerHTML = `<div class="master-row">
-        <div class="vname">🎬 master.mp4 <span style="color:var(--muted);font-size:11px">(teljes összefűzött)</span></div>
+        <div class="vname">🎬 ${escHtml(master.name)} <span style="color:var(--muted);font-size:11px">(teljes összefűzött)</span></div>
         <div class="vsize">${fmtSize(master.size)}</div>
         <div class="vdate">${fmtDate(master.mtime)}</div>
-        <button class="btn-green" style="padding:5px 12px;font-size:12px" onclick="playVideo('master.mp4','master')">▶</button>
-        <a href="${location.origin}/master.mp4" download class="btn-blue" style="padding:5px 12px;font-size:12px;text-decoration:none;border-radius:7px">⬇</a>
+        <button class="btn-green" style="padding:5px 12px;font-size:12px" onclick="playVideo('master/${currentCamera}.mp4','${escHtml(master.name)}')">▶</button>
+        <a href="${location.origin}/master/${currentCamera}.mp4" download class="btn-blue" style="padding:5px 12px;font-size:12px;text-decoration:none;border-radius:7px">⬇</a>
       </div>`;
     } else {
       wrap.innerHTML = '';
@@ -888,7 +987,7 @@ function renderVideoList(type, videos, master) {
     return;
   }
 
-  const subpath = type === 'archive' ? 'archive' : 'renders';
+  const subpath = (type === 'archive' ? 'archive' : 'renders') + '/' + currentCamera;
   const INITIAL = type === 'archive' ? 2 : videos.length;
   const visible = videos.slice(0, INITIAL);
   const hidden  = videos.slice(INITIAL);
@@ -1142,8 +1241,8 @@ async function buildMaster() {
   const enabled = document.getElementById('master-days-enabled').checked;
   const days = enabled ? parseInt(document.getElementById('master-days-input').value, 10) || 0 : 0;
   const msg = days > 0
-    ? `Újraépíted a master videót az utolsó ${days} nap szegmenseiből?\n\nA meglévő master.mp4 felülíródik.`
-    : 'Újraépíted a master videót az összes archív szegmensből?\n\nA meglévő master.mp4 felülíródik.';
+    ? `Újraépíted a(z) ${currentCamera}_master videót az utolsó ${days} nap szegmenseiből?\n\nA meglévő master felülíródik.`
+    : `Újraépíted a(z) ${currentCamera}_master videót az összes archív szegmensből?\n\nA meglévő master felülíródik.`;
   if (!confirm(msg)) return;
   await runScript('build_master', days > 0 ? { days } : {});
 }
@@ -1325,10 +1424,252 @@ async function loadEmailLog() {
   }).join('');
 }
 
+// ── Cameras ─────────────────────────────────────────────────────────────────
+function curCam() { return cameraList.find(c => c.name === currentCamera); }
+
+// dropdown text: the USB camera is just its name ("USB" by default), IP cameras get an (IP) tag
+function camLabel(c) { return c.type === 'ip' ? c.name + ' (IP)' : (c.name === 'USB' ? c.name : c.name + ' (USB)'); }
+
+async function loadCameras() {
+  let d;
+  try { d = await api('/api/cameras'); } catch (e) { return; }
+  cameraList = d.cameras || [];
+  let saved = '';
+  try { saved = localStorage.getItem('tl_camera') || ''; } catch (e) {}
+  if (!cameraList.some(c => c.name === currentCamera)) {
+    currentCamera = cameraList.some(c => c.name === saved) ? saved : (d.default || (cameraList[0] || {}).name || '');
+  }
+  const sel = document.getElementById('camera-select');
+  sel.innerHTML = cameraList.map(c =>
+    `<option value="${escAttr(c.name)}">${escHtml(camLabel(c))}${c.active ? ' ●' : ''}</option>`).join('');
+  sel.value = currentCamera;
+  onCameraChange(true);
+}
+
+function onCameraChange(fromLoad) {
+  const sel = document.getElementById('camera-select');
+  if (!fromLoad) currentCamera = sel.value;
+  try { localStorage.setItem('tl_camera', currentCamera); } catch (e) {}
+  const c = curCam() || {};
+  document.querySelectorAll('.cam-name').forEach(el => { el.textContent = currentCamera; });
+  document.getElementById('preview-title-sub').textContent = c.type === 'ip' ? '(alstream)' : '(:8081)';
+  previewSrcNow = '__reset__';           // force the preview image to follow the new camera
+  document.getElementById('preview-img').src = '';
+  refreshStatus();
+  loadVideos();
+  loadPrecapture();
+  fillCamSettings();
+}
+
+function updateCameraState(cams) {
+  const el = document.getElementById('camera-state');
+  const c = cams[currentCamera];
+  if (!c) { el.textContent = ''; return; }
+  const s = c.session || {};
+  el.innerHTML = c.active
+    ? `<span class="dot green"></span>aktív · ${escHtml(s.start || '')}–${escHtml(s.end || '')} · ${escHtml(String(s.interval || ''))} mp`
+    : '<span class="dot red"></span>nem rögzít';
+  // keep the dropdown's running marks current
+  const sel = document.getElementById('camera-select');
+  Array.from(sel.options).forEach(o => {
+    const cc = cams[o.value];
+    if (!cc) return;
+    o.textContent = camLabel({name: o.value, type: cc.type}) + (cc.active ? ' ●' : '');
+  });
+}
+
+function previewStart() {
+  const c = curCam();
+  if (c && c.type === 'ip') { ipPreviewOn[currentCamera] = true; refreshStatus(); }
+  else runScript('preview_start');
+}
+function previewStop() {
+  const c = curCam();
+  if (c && c.type === 'ip') { ipPreviewOn[currentCamera] = false; refreshStatus(); }
+  else runScript('preview_stop');
+}
+
+// capture / video settings of the selected camera
+function toggleCamSettingsPanel() {
+  const panel = document.getElementById('camset-panel');
+  const open = panel.style.display === 'none';
+  panel.style.display = open ? 'block' : 'none';
+  document.getElementById('camset-arrow').textContent = open ? '▼' : '▶';
+  if (open) fillCamSettings();
+}
+
+const CAM_SETTING_FIELDS = ['start', 'end', 'interval', 'jpeg_quality', 'capture_resolution', 'camera_skip',
+                            'video_resolution', 'fps', 'crf', 'preset', 'font_size'];
+
+function fillCamSettings() {
+  const c = curCam();
+  if (!c) return;
+  CAM_SETTING_FIELDS.forEach(k => { document.getElementById('cs-' + k).value = c[k]; });
+  document.getElementById('cs-overlay').checked = !!c.overlay;
+  document.getElementById('cs-skip-row').style.display = c.type === 'usb' ? '' : 'none';
+  document.getElementById('cs-res-hint').textContent = c.type === 'ip' ? '(native = a kamera mérete)' : '';
+  document.getElementById('camset-result').textContent = '';
+}
+
+async function saveCamSettings() {
+  const res = document.getElementById('camset-result');
+  const settings = {};
+  CAM_SETTING_FIELDS.forEach(k => { settings[k] = document.getElementById('cs-' + k).value; });
+  settings.overlay = document.getElementById('cs-overlay').checked;
+  res.style.color = 'var(--muted)';
+  res.textContent = 'Mentés...';
+  try {
+    const r = await api('/api/cameras/update', 'POST', {name: currentCamera, settings});
+    res.style.color = r.ok ? 'var(--green)' : 'var(--red)';
+    res.textContent = r.ok ? 'Mentve.' : (r.error || 'Hiba');
+    if (r.ok) {
+      const d = await api('/api/cameras');
+      cameraList = d.cameras || cameraList;
+      loadPrecapture();
+    }
+  } catch (e) {
+    res.style.color = 'var(--red)';
+    res.textContent = 'Hálózati hiba';
+  }
+}
+
+// camera list in the system settings
+function toggleCamsPanel() {
+  const panel = document.getElementById('cams-panel');
+  const open = panel.style.display === 'none';
+  panel.style.display = open ? 'block' : 'none';
+  document.getElementById('cams-arrow').textContent = open ? '▼' : '▶';
+  if (open) renderCamsList();
+}
+
+function camFormHtml(c) {
+  const id = f => `ce-${c.name}-${f}`;
+  const row = (label, input) => `<div class="form-row" style="margin-bottom:6px"><label>${label}</label>${input}</div>`;
+  let h = row('Név', `<input class="cam-in" id="${id('name')}" value="${escAttr(c.name)}" maxlength="32" style="width:100%">`);
+  if (c.type === 'ip') {
+    h += `<div style="display:flex;gap:8px;flex-wrap:wrap">
+      <div style="flex:2;min-width:140px">${row('IP cím', `<input class="cam-in" id="${id('host')}" value="${escAttr(c.host || '')}" style="width:100%">`)}</div>
+      <div style="width:90px">${row('Port', `<input class="cam-in" type="number" id="${id('port')}" value="${c.port || 554}" style="width:100%">`)}</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <div style="flex:1;min-width:120px">${row('Felhasználó', `<input class="cam-in" id="${id('user')}" value="${escAttr(c.user || '')}" style="width:100%">`)}</div>
+      <div style="flex:1;min-width:120px">${row('Jelszó', `<input class="cam-in" type="password" id="${id('pw')}" autocomplete="new-password" placeholder="${c.password_set ? '(változatlan)' : ''}" style="width:100%">`)}</div></div>
+      <details style="margin-bottom:6px"><summary style="font-size:11px;color:var(--muted);cursor:pointer">Haladó: RTSP címek</summary>
+        ${row('Fő stream', `<input class="cam-in" id="${id('main')}" value="${escAttr(c.rtsp_main || '')}" style="width:100%">`)}
+        ${row('Alstream', `<input class="cam-in" id="${id('sub')}" value="${escAttr(c.rtsp_sub || '')}" style="width:100%">`)}
+      </details>`;
+  } else {
+    h += '<div class="hint" style="margin-bottom:6px">A számítógéphez USB-n csatlakoztatott webkamera. Nem törölhető, de átnevezhető.</div>';
+  }
+  h += `<div class="btn-grid">
+      ${c.type === 'ip' ? `<button class="btn-gray" onclick="testCamera('${c.name}')">🔌 Kapcsolat próba</button>` : ''}
+      <button class="btn-green" onclick="saveCameraConn('${c.name}')">💾 Mentés</button>
+      ${c.type === 'ip' ? `<button class="btn-red" onclick="removeCamera('${c.name}')">Törlés</button>` : ''}
+    </div>
+    <div id="${id('result')}" style="margin-top:6px;font-size:12px;color:var(--muted);white-space:pre-wrap"></div>`;
+  return h;
+}
+
+async function renderCamsList() {
+  const list = document.getElementById('cams-list');
+  try {
+    const d = await api('/api/cameras');
+    cameraList = d.cameras || cameraList;
+  } catch (e) {
+    list.innerHTML = '<span style="color:var(--red);font-size:12px">Hiba a lista betöltésekor.</span>';
+    return;
+  }
+  list.innerHTML = cameraList.map(c => `<details style="padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px">
+      <summary style="cursor:pointer;font-size:13px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span class="dot ${c.active ? 'green' : 'red'}"></span>
+        <b>${escHtml(c.name)}</b>
+        <span style="color:var(--muted);font-size:11px">${c.type === 'usb' ? 'USB webkamera' : 'IP kamera · ' + escHtml(c.host || '')}</span>
+        <span style="color:var(--muted);font-size:11px;margin-left:auto">${c.active ? 'rögzít' : ''}</span>
+      </summary>
+      <div style="margin-top:10px">${camFormHtml(c)}</div></details>`).join('');
+}
+
+function camResult(el, ok, text) {
+  el.style.color = ok ? 'var(--green)' : 'var(--red)';
+  el.textContent = text;
+}
+
+function camTestText(r) {
+  if (r.error && !r.main) return r.error;
+  const part = (label, i) => i.ok
+    ? `${label}: ✓ ${i.codec} ${i.width}×${i.height}, ${i.fps} fps (${i.secs} mp)`
+    : `${label}: ✗ ${i.error}`;
+  return part('Fő stream', r.main) + '\n' + part('Alstream', r.sub);
+}
+
+async function testCamera(name) {
+  const res = document.getElementById(name ? `ce-${name}-result` : 'cams-result');
+  const g = name ? (f => document.getElementById(`ce-${name}-${f}`)) : null;
+  const body = name
+    ? {name, host: g('host').value, port: g('port').value, user: g('user').value, password: g('pw').value,
+       rtsp_main: g('main').value, rtsp_sub: g('sub').value}
+    : {host: document.getElementById('cn-host').value, port: document.getElementById('cn-port').value,
+       user: document.getElementById('cn-user').value, password: document.getElementById('cn-pw').value,
+       rtsp_main: document.getElementById('cn-main').value, rtsp_sub: document.getElementById('cn-sub').value};
+  res.style.color = 'var(--muted)';
+  res.textContent = 'Kapcsolódás... (néhány másodperc)';
+  try {
+    const r = await api('/api/cameras/test', 'POST', body);
+    camResult(res, r.ok, camTestText(r));
+  } catch (e) { camResult(res, false, 'Hálózati hiba'); }
+}
+
+async function addCamera() {
+  const res = document.getElementById('cams-result');
+  const v = id => document.getElementById(id).value;
+  const body = {name: v('cn-name').trim(), host: v('cn-host').trim(), port: v('cn-port'), user: v('cn-user'),
+                password: v('cn-pw'), rtsp_main: v('cn-main'), rtsp_sub: v('cn-sub')};
+  try {
+    const r = await api('/api/cameras', 'POST', body);
+    camResult(res, r.ok, r.ok ? 'Hozzáadva. Állítsd be a rögzítést a Vezérlés kártyán (kamera választó).' : (r.error || 'Hiba'));
+    if (r.ok) {
+      ['cn-name', 'cn-host', 'cn-pw', 'cn-main', 'cn-sub'].forEach(id => { document.getElementById(id).value = ''; });
+      await loadCameras();
+      renderCamsList();
+    }
+  } catch (e) { camResult(res, false, 'Hálózati hiba'); }
+}
+
+async function saveCameraConn(name) {
+  const g = f => document.getElementById(`ce-${name}-${f}`);
+  const res = g('result');
+  const c = cameraList.find(x => x.name === name);
+  const body = {name, new_name: g('name').value.trim()};
+  if (c && c.type === 'ip') {
+    Object.assign(body, {host: g('host').value.trim(), port: g('port').value, user: g('user').value,
+                         rtsp_main: g('main').value, rtsp_sub: g('sub').value});
+    if (g('pw').value) body.password = g('pw').value;
+  }
+  try {
+    const r = await api('/api/cameras/update', 'POST', body);
+    camResult(res, r.ok, r.ok ? 'Mentve.' : (r.error || 'Hiba'));
+    if (r.ok) {
+      if (currentCamera === name) currentCamera = body.new_name || name;
+      await loadCameras();
+      renderCamsList();
+    }
+  } catch (e) { camResult(res, false, 'Hálózati hiba'); }
+}
+
+async function removeCamera(name) {
+  if (!confirm(`Törlöd a(z) ${name} kamerát a listából?\n\nA képei és a videói a lemezen megmaradnak.`)) return;
+  try {
+    const r = await api('/api/cameras/remove', 'POST', {name});
+    if (!r.ok) { camResult(document.getElementById(`ce-${name}-result`), false, r.error || 'Hiba'); return; }
+    if (currentCamera === name) currentCamera = '';
+    await loadCameras();
+    renderCamsList();
+  } catch (e) { camResult(document.getElementById(`ce-${name}-result`), false, 'Hálózati hiba'); }
+}
+
 // ── Unit error journal ──────────────────────────────────────────────────────
 const UERR_KIND = {
   sensor_timeout: 'Szenzor nem jelentkezik', device_no_response: 'Eszköz nem válaszol',
-  command_failed: 'Parancs sikertelen', device_error: 'Eszközhiba', log_error: 'Soros naplóhiba', rule_log: 'Rules üzenet',
+  command_failed: 'Parancs sikertelen', device_error: 'Eszközhiba', log_error: 'Soros naplóhiba', rule_log: 'Rules üzenet', camera_error: 'Kamera hiba',
   reboot: 'Újraindulás', unreachable: 'Nem elérhető'
 };
 
@@ -1417,7 +1758,7 @@ function pcLine(label, r) {
 async function loadPrecapture() {
   let d, src;
   try {
-    d = await api('/api/precapture');
+    d = await api('/api/precapture?camera=' + encodeURIComponent(currentCamera));
     src = (await api('/api/sensor-sources')).sources || [];
   } catch (e) { return; }
   const c = d.cfg;
@@ -1456,6 +1797,7 @@ async function savePrecapture() {
   res.textContent = 'Mentés...';
   try {
     const r = await api('/api/precapture', 'POST', {
+      camera: currentCamera,
       enabled: document.getElementById('pc-enabled').checked,
       lead_sec: parseInt(document.getElementById('pc-lead').value, 10),
       target: document.getElementById('pc-target').value,
@@ -1484,7 +1826,7 @@ async function testPrecapture(phase) {
   res.style.color = 'var(--muted)';
   res.textContent = 'Küldés...';
   try {
-    const r = await api('/api/precapture/test', 'POST', { target, cmd, phase });
+    const r = await api('/api/precapture/test', 'POST', { camera: currentCamera, target, cmd, phase });
     res.style.color = r.ok ? 'var(--green)' : 'var(--red)';
     res.textContent = r.ok ? `Elküldve (${r.secs} mp). A gateway elfogadta a parancsot.` : `Sikertelen: ${r.message}`;
     loadPrecapture();

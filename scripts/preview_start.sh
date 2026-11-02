@@ -6,6 +6,12 @@
 # =============================================================================
 
 source "$(dirname "$0")/config.sh"
+# Az ustreamer az USB kamerát streameli (az IP kamerák előnézetét a webes felület adja az alstreamből)
+load_camera "" || exit 1
+if [ "$CAM_TYPE" != "usb" ]; then
+    echo "ERROR: ez a preview csak USB kamerához való."
+    exit 1
+fi
 
 PREVIEW_PORT=8081
 PREVIEW_RES="1920x1080"

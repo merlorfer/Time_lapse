@@ -4,12 +4,13 @@
 # Minden script source-olja ezt a fájlt.
 # =============================================================================
 
-# Felvételi időablak
+# Felvételi időablak (alapértelmezés; kamerára a load_camera() állítja be)
 CAPTURE_START="06:00"
 CAPTURE_END="20:00"
 
 # Könyvtárak
-FRAME_DIR="/tmp/timelapse_frames"
+FRAMES_ROOT="/tmp/timelapse_frames"
+FRAME_DIR="$FRAMES_ROOT"      # a load_camera() kamerára külön mappára állítja (FRAMES_ROOT/<kamera>)
 SCRIPT_DIR="/home/orangepi/timelapse/scripts"
 LOG_DIR="/home/orangepi/timelapse/logs"
 
@@ -46,7 +47,6 @@ detect_camera_device() {
     echo "$preferred"
 }
 
-CAMERA_DEVICE="$(detect_camera_device "$CAMERA_DEVICE_PREFERRED" "$CAMERA_NAME_MATCH")"
 CAPTURE_INTERVAL=60  # képek közötti szünet másodpercben
 CAMERA_SKIP=5        # eldobott képkocka induláskor (fehéregyensúly stabilizálás)
 JPEG_QUALITY=85
@@ -68,3 +68,24 @@ MASTER_VIDEO="${VIDEO_BASE}/master.mp4"
 
 # Perzisztens konfig (SD kártyán, túléli a rebootot)
 TIMELAPSE_CONFIG="/home/orangepi/timelapse/timelapse_config.json"
+
+# --- Kamera betöltése -------------------------------------------------------
+# load_camera [NÉV] [nosession]   (üres név = az USB kamera)
+# A kamera mentett beállításai (cameras.py), majd az éppen futó / utoljára indított
+# munkamenet értékei (CAPTURE_START/END/INTERVAL, VIDEO_BASE; "nosession" esetén ezek kimaradnak,
+# pl. új munkamenet indításakor), végül a kamerához tartozó
+# könyvtárak: FRAME_DIR, ARCHIVE_DIR=<tár>/archive/<kamera>, MASTER_VIDEO=<tár>/<kamera>_master.mp4,
+# RENDERS_DIR=<tár>/renders/<kamera>. USB kameránál a CAMERA_DEVICE is.
+load_camera() {
+    eval "$(python3 "${SCRIPT_DIR}/cameras.py" env "${1:-}")" || return 1
+    if [ "${2:-}" != "nosession" ] && [ -f "$SESSION_CONF" ]; then
+        source "$SESSION_CONF"
+    fi
+    ARCHIVE_DIR="${VIDEO_BASE}/archive/${CAM}"
+    MASTER_VIDEO="${VIDEO_BASE}/${CAM}_master.mp4"
+    RENDERS_DIR="${VIDEO_BASE}/renders/${CAM}"
+    if [ "$CAM_TYPE" = "usb" ]; then
+        CAMERA_DEVICE="$(detect_camera_device "$CAMERA_DEVICE_PREFERRED" "$CAMERA_NAME_MATCH")"
+    fi
+    return 0
+}

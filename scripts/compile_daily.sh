@@ -1,22 +1,22 @@
 #!/bin/bash
 # =============================================================================
-# compile_daily.sh – Egy rögzítési munkamenet videója + master concat
-# Használat: compile_daily.sh [--day YYYY-MM-DD]
-#   --day D   a D napon KEZDŐDÖTT rögzítési ablak képeit fűzi össze (éjfélen átnyúló
-#             ablaknál az éjfél utáni képek is ide tartoznak). A videó neve D.mp4.
-#   (nincs)   kézi indítás: minden esedékes, azaz már lezárult ablakú napot feldolgoz.
+# compile_daily.sh – Egy kamera egy rögzítési munkamenetének videója + master concat
+# Használat: compile_daily.sh [--camera NÉV] [--day YYYY-MM-DD]
+#   --camera K  melyik kamera (nélküle: minden kamera, --day nélkül is)
+#   --day D     a D napon KEZDŐDÖTT rögzítési ablak képeit fűzi össze (éjfélen átnyúló
+#               ablaknál az éjfél utáni képek is ide tartoznak). A videó: archive/<kamera>/D.mp4.
+#   (nincs)     kézi indítás: minden esedékes, azaz már lezárult ablakú napot feldolgoz.
 # Automatikusan a compile_check.sh hívja percenként: az ablak vége után 1 perccel indul.
 # A képek a ramdisken maradnak, és csak a sikeres mentés után törlődnek (pontosan azok,
 # amelyekből a videó készült).
 # =============================================================================
 
 source "$(dirname "$0")/config.sh"
-[ -f /tmp/timelapse_session.conf ] && source /tmp/timelapse_session.conf
 
 LOG="${LOG_DIR}/compile.log"
 mkdir -p "$LOG_DIR"
 
-log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') ${CAM:+[$CAM] }$*" >> "$LOG"; }
 
 # send_alert <esemény_id> "Tárgy" "Üzenet" – sorba állítja; az email_dispatcher küldi el, ha van internet
 send_alert() {
@@ -25,28 +25,40 @@ send_alert() {
 
 # SD fallback útvonalak (mindig elérhetők)
 SD_BASE="/home/orangepi/timelapse/videos"
-SD_ARCHIVE="${SD_BASE}/archive"
 
 SESSIONS="${SCRIPT_DIR}/session_days.py"
 
 DAY=""
+CAMERA_ARG=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --day) DAY="$2"; shift 2 ;;
+        --camera) CAMERA_ARG="$2"; shift 2 ;;
         *) shift ;;
     esac
 done
 
-# Paraméter nélkül (kézi gomb): az esedékes napok egymás után, a zárat a gyerekfolyamat fogja.
+# Kamera nélkül: minden kamerára külön (az összefűzések zárral egymás után futnak).
+if [ -z "$CAMERA_ARG" ]; then
+    RC=0
+    for C in $(python3 "${SCRIPT_DIR}/cameras.py" names); do
+        bash "$0" --camera "$C" ${DAY:+--day "$DAY"} || RC=1
+    done
+    exit $RC
+fi
+load_camera "$CAMERA_ARG" || exit 1
+SD_ARCHIVE="${SD_BASE}/archive/${CAM}"
+
+# Nap nélkül (kézi gomb): az esedékes napok egymás után, a zárat a gyerekfolyamat fogja.
 if [ -z "$DAY" ]; then
-    DUE=$(python3 "$SESSIONS" due --grace 0)
+    DUE=$(python3 "$SESSIONS" due --grace 0 --camera "$CAM")
     if [ -z "$DUE" ]; then
-        MSG="Nincs esedékes nap: a ramdisken lévő képek rögzítési ablaka még nem zárult le (az ablak vége után automatikusan összefűződnek)."
-        log "$MSG"; echo "$MSG"
+        MSG="[$CAM] Nincs esedékes nap: a ramdisken lévő képek rögzítési ablaka még nem zárult le (az ablak vége után automatikusan összefűződnek)."
+        log "Nincs esedékes nap"; echo "$MSG"
         exit 0
     fi
     RC=0
-    for D in $DUE; do bash "$0" --day "$D" || RC=1; done
+    for D in $DUE; do bash "$0" --camera "$CAM" --day "$D" || RC=1; done
     exit $RC
 fi
 if ! [[ "$DAY" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
@@ -102,7 +114,7 @@ remount_usb() {
 
 # ── Frame lista összeállítása ─────────────────────────────────────────────────
 FRAME_LIST=$(mktemp)
-python3 "$SESSIONS" frames "$DAY" > "$FRAME_LIST"
+python3 "$SESSIONS" frames "$DAY" --camera "$CAM" > "$FRAME_LIST"
 
 FRAME_COUNT=$(wc -l < "$FRAME_LIST")
 if [ "$FRAME_COUNT" -eq 0 ]; then
@@ -118,22 +130,28 @@ while IFS= read -r f; do
 done < "$FRAME_LIST"
 
 # ── Napi videó generálása RAMDISKRE ──────────────────────────────────────────
-TMP_DAILY="/tmp/timelapse_compile_${DAY}.mp4"
+TMP_DAILY="/tmp/timelapse_compile_${CAM}_${DAY}.mp4"
 
 log "Renderelés ramdiskre: $TMP_DAILY"
+if [ "$RESOLUTION" = "native" ]; then
+    VIDEO_FILTER="format=yuv420p"
+else
+    VIDEO_FILTER="scale=${RESOLUTION},format=yuv420p"
+fi
+# -r a bemenet előtt: a képkockák sebessége (minden kép megmarad, a videó hossza a fps-től függ)
 ffmpeg -y \
-    -f concat -safe 0 -i "$FFMPEG_INPUT" \
-    -framerate "$FFMPEG_FPS" \
-    -vf "scale=${RESOLUTION},format=yuv420p" \
+    -r "$FFMPEG_FPS" -f concat -safe 0 -i "$FFMPEG_INPUT" \
+    -vf "$VIDEO_FILTER" \
     -c:v libx264 \
     -crf "$FFMPEG_CRF" \
     -preset "$FFMPEG_PRESET" \
     "$TMP_DAILY" \
     >> "$LOG" 2>&1
+FF_RC=$?
 
 rm -f "$FFMPEG_INPUT"
 
-if [ $? -ne 0 ] || [ ! -f "$TMP_DAILY" ]; then
+if [ $FF_RC -ne 0 ] || [ ! -f "$TMP_DAILY" ]; then
     log "ERROR: ffmpeg sikertelen, napi videó nem készült el"
     rm -f "$TMP_DAILY"
     exit 1
@@ -153,7 +171,7 @@ log "Render kész: $(du -sh "$TMP_DAILY" | cut -f1)"
 DEST_DAILY=""
 
 if [ "$USB_OK" = true ]; then
-    USB_ARCHIVE="${USB_MOUNT}/archive"
+    USB_ARCHIVE="${USB_MOUNT}/archive/${CAM}"
     mkdir -p "$USB_ARCHIVE"
     DEST_DAILY="${USB_ARCHIVE}/${DAY}.mp4"
 
@@ -238,11 +256,11 @@ except: print('0')
 " 2>/dev/null)
 
 if [ "$MASTER_DAYS_ENABLED" = "1" ] && [ "${MASTER_DAYS:-0}" -gt 0 ]; then
-    log "Rebuilding master.mp4 (last ${MASTER_DAYS} days)"
-    MASTER_OUT=$("$SCRIPT_DIR/build_master.sh" --days "$MASTER_DAYS" 2>&1)
+    log "Rebuilding ${CAM}_master.mp4 (last ${MASTER_DAYS} days)"
+    MASTER_OUT=$("$SCRIPT_DIR/build_master.sh" --camera "$CAM" --days "$MASTER_DAYS" 2>&1)
 else
-    log "Rebuilding master.mp4 (all segments)"
-    MASTER_OUT=$("$SCRIPT_DIR/build_master.sh" 2>&1)
+    log "Rebuilding ${CAM}_master.mp4 (all segments)"
+    MASTER_OUT=$("$SCRIPT_DIR/build_master.sh" --camera "$CAM" 2>&1)
 fi
 
 if [ $? -eq 0 ]; then
