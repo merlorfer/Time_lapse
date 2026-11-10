@@ -79,6 +79,9 @@ log "=== Compiling session video for ${DAY} ==="
 USB_MOUNT="/mnt/timelapse"
 USB_OK=false
 USB_DEV=""
+# Ha a tároló nem rendben van (nem mountolt vagy nem írható), előbb megpróbáljuk megjavítani,
+# és csak ha az sem megy, kerül a videó az SD kártyára.
+bash "$SCRIPT_DIR/usb_heal.sh" --ensure >> "$LOG" 2>&1
 if mountpoint -q "$USB_MOUNT" && [ -w "$USB_MOUNT" ]; then
     USB_OK=true
     USB_DEV=$(findmnt -n -o SOURCE "$USB_MOUNT" 2>/dev/null)
@@ -87,29 +90,11 @@ else
     log "WARNING: USB nem elérhető ($USB_MOUNT), SD fallbackre vált"
 fi
 
-# Pendrive remount kísérlet (ha USB_DEV ismert és az írás sikertelen)
+# Pendrive újracsatlakoztatás (ugyanaz, mint a weboldalon a leválasztás + mountolás): lásd usb_heal.sh
 remount_usb() {
-    if [ -z "$USB_DEV" ]; then
-        log "Remount kihagyva: eszközazonosító ismeretlen"
-        return 1
-    fi
-    log "Remount kísérlet: umount $USB_MOUNT → mount $USB_DEV $USB_MOUNT"
-    sync
-    sudo umount -l "$USB_MOUNT" 2>/dev/null
-    sleep 2
-    FS=$(lsblk -o FSTYPE -n "$USB_DEV" 2>/dev/null | head -1)
-    if [ "$FS" = "ntfs" ] || [ "$FS" = "ntfs-3g" ]; then
-        sudo mount -t ntfs-3g -o uid=1000,gid=1000,umask=022 "$USB_DEV" "$USB_MOUNT" 2>>/tmp/remount_err
-    else
-        sudo mount -o uid=1000,gid=1000 "$USB_DEV" "$USB_MOUNT" 2>>/tmp/remount_err
-    fi
-    if mountpoint -q "$USB_MOUNT" && [ -w "$USB_MOUNT" ]; then
-        log "Remount sikeres: $USB_MOUNT"
-        return 0
-    else
-        log "Remount sikertelen: $(cat /tmp/remount_err 2>/dev/null)"
-        return 1
-    fi
+    log "Remount kísérlet (usb_heal.sh)"
+    bash "$SCRIPT_DIR/usb_heal.sh" --force >> "$LOG" 2>&1
+    mountpoint -q "$USB_MOUNT" && [ -w "$USB_MOUNT" ]
 }
 
 # ── Frame lista összeállítása ─────────────────────────────────────────────────

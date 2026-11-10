@@ -37,6 +37,7 @@ SERIAL_LOG_FILE   = "/tmp/esp32_serial.log"
 TIMELAPSE_CONFIG  = "/home/orangepi/timelapse/timelapse_config.json"
 USB_MOUNT         = "/mnt/timelapse"
 SD_BASE           = "/home/orangepi/timelapse/videos"
+USB_DETACH_FLAG   = "/tmp/timelapse_usb_detached"   # manual detach: usb_heal.sh leaves the drive alone
 PORT              = 8082
 HOST              = "0.0.0.0"
 
@@ -1245,6 +1246,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             cmd = ["sudo", "mount", "-o", "uid=1000,gid=1000", dev, USB_MOUNT]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if r.returncode == 0:
+            try:
+                os.remove(USB_DETACH_FLAG)          # mounted again: automatic repair is on again
+            except OSError:
+                pass
             os.makedirs(os.path.join(USB_MOUNT, "archive"), exist_ok=True)
             os.makedirs(os.path.join(USB_MOUNT, "renders"), exist_ok=True)
             _update_session_storage(USB_MOUNT)
@@ -1269,6 +1274,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         subprocess.run(["sync"], capture_output=True, timeout=10)
         r = subprocess.run(["sudo", "umount", "-l", USB_MOUNT], capture_output=True, text=True, timeout=30)
         if r.returncode == 0:
+            try:
+                open(USB_DETACH_FLAG, "w").close()  # on purpose: the automatic repair must not remount it
+            except OSError:
+                pass
             msg = "USB leválasztva (lazy umount). Néhány másodperc múlva biztonságosan kihúzható."
             if current == USB_MOUNT:
                 msg += " Tárhely átváltva SD kártyára."

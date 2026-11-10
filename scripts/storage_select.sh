@@ -101,6 +101,7 @@ case "$CHOICE" in
         fi
 
         if $MOUNT_CMD 2>/tmp/mount_err; then
+            rm -f /tmp/timelapse_usb_detached     # újra mountolva: az automatikus javítás megint él
             # UUID lekérése fstab frissítéshez
             NEW_UUID=$(blkid -s UUID -o value "$DEV_CHOICE")
             # HTTP szerver újraindítása, hogy az USB mappájából szolgáljon
@@ -136,6 +137,7 @@ case "$CHOICE" in
         fi
         sudo systemctl stop timelapse-http 2>/dev/null
         if sudo umount "$USB_PATH" 2>/tmp/umount_err; then
+            touch /tmp/timelapse_usb_detached     # szándékos: az automatikus javítás nem mountolja vissza
             sudo systemctl start timelapse-http 2>/dev/null
             whiptail --title "Kész" --msgbox \
                 "USB leválasztva: ${USB_PATH}\n${SWITCH_MSG}\nBiztonságosan kihúzható." 10 52

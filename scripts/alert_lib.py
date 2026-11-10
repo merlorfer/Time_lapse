@@ -47,6 +47,7 @@ EVENTS = [
     ("unit_reboot",         "Egység: a CLCode01 újraindult"),
     ("unit_unreachable",    "Egység: nem érhető el"),
     ("camera_error",        "Kamera: a képrögzítés ismételten sikertelen"),
+    ("usb_unavailable",     "USB tároló nem elérhető, az automatikus javítás sikertelen"),
     ("timelapse_stopped",   "Kamera: a timelapse rögzítés le lett állítva (kézzel, a weboldalról vagy parancssorból)"),
 ]
 EVENT_IDS = {e[0] for e in EVENTS}

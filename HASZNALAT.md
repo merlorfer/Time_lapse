@@ -113,6 +113,47 @@ Az átváltás azonnal érvényes: a futó timelapse session és a HTTP szerver 
 
 ---
 
+## Automatikus USB-javítás és pendrive csere
+
+Ha a pendrive nem látszik vagy nem írható (például a fájlrendszer csak olvashatóra váltott), a rendszer **maga megcsinálja azt, amit te a weboldalon a „USB leválasztás", majd a „mountolás" gombbal**: leválasztja a beragadt csatlakozást, újra mountolja, és próbafájl írásával ellenőrzi.
+
+- **5 percenként** fut egy ellenőrzés (`usb_heal.sh --check`, cron). Ha a tároló rendben van, nem csinál semmit. Az ellenőrzés **csak olvas, nem ír a pendrive-ra** (megnézi, hogy mountolva van-e, nem váltott-e csak olvashatóra, és olvasható-e a gyökérkönyvtára), így a gyakori futás nem koptatja. Próbafájlt csak egy javítás után ír, egyszer, annak igazolására, hogy a javítás sikerült. A csendes írási hibát az összefűzés másolás-ellenőrzése veszi észre (ilyenkor az is újracsatlakoztat).
+- Az **éjféli (és minden) videó-összefűzés** is előbb megpróbálja megjavítani a tárolót, és csak ha ez sem megy, kerül a videó az SD kártyára. Ugyanez történik, ha a videó másolása közben derül ki, hogy nem lehet írni.
+- Ha a javítás nem sikerül, **email megy** (*USB tároló nem elérhető…* esemény, legfeljebb 6 óránként). Az eredményt a `logs/usb_heal.log` tartalmazza.
+- **Kézi leválasztáshoz nem nyúl:** ha a weboldalon (vagy `storage_select.sh`-val) te választod le a pendrive-ot, a javítás addig nem csatlakoztatja vissza, amíg te nem mountolod újra (a mountolás visszakapcsolja az automatikát). Így nyugodtan kihúzhatod.
+- Kézzel is futtatható: `/home/orangepi/timelapse/scripts/usb_heal.sh --force` (leválaszt és újra mountol).
+
+### Hol kell átírni az UUID-t, ha másik pendrive-ot használsz
+
+A javítás azt a pendrive-ot csatlakoztatja, amelyiknek az UUID-ja az **`/etc/fstab`** fájl `/mnt/timelapse` sorában áll. Más pendrive-ra váltáskor ezt a sort kell átírni:
+
+1. Dugd be az új pendrive-ot, és olvasd ki az UUID-ját (és a fájlrendszer típusát):
+   ```bash
+   lsblk -f          # vagy: sudo blkid
+   ```
+   A pendrive partícióját keresd (pl. `/dev/sdb1`); az `UUID` oszlop az érték (FAT-nál rövid, pl. `1A2B-3C4D`, NTFS-nél hosszú).
+2. Szerkeszd az fstab-ot:
+   ```bash
+   sudo nano /etc/fstab
+   ```
+   A sor így néz ki, cseréld ki benne az UUID-t (és szükség esetén a típust):
+   ```
+   UUID=1A2B-3C4D  /mnt/timelapse  vfat  uid=1000,gid=1000,umask=022,nofail  0  2
+   ```
+   NTFS pendrive-nál a típus `ntfs-3g`, a többi mező ugyanaz; ext4-nél `ext4  defaults,nofail  0  2`.
+3. Próbáld ki, és ellenőrizd:
+   ```bash
+   sudo umount /mnt/timelapse      # ha éppen mountolva van
+   sudo systemctl daemon-reload
+   sudo mount /mnt/timelapse
+   findmnt /mnt/timelapse
+   ```
+   Ha a `findmnt` kiírja az új eszközt, kész. Az `archive/` és `renders/` mappákat a rendszer létrehozza. A régi pendrive videóit másold át az újra, ha kell.
+
+Ha az fstab-ban a pendrive neve (`/dev/sda1`) áll UUID helyett, a javítás az első USB-s partíciót keresi meg, de az UUID megbízhatóbb, mert a `/dev/sdX` név csatlakoztatásonként változhat.
+
+---
+
 ## HTTP szerver
 
 Bootoláskor automatikusan indul. Kész videók böngészőből: **http://192.168.68.177:8080/**

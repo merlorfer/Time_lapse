@@ -12,6 +12,9 @@ TZ=Europe/Budapest
 # A képek addig a ramdisken maradnak, és csak a sikeres mentés után törlődnek.
 * * * * * orangepi /home/orangepi/timelapse/scripts/compile_check.sh
 
+# USB tároló őrzése: ha nem mountolt vagy nem írható, leválasztja és újra mountolja (hiba esetén email)
+*/5 * * * * orangepi /home/orangepi/timelapse/scripts/usb_heal.sh --check
+
 # Szenzor adatok napi mentése ramdiskről (a videótól független)
 5 0 * * * orangepi /home/orangepi/timelapse/scripts/sensor_backup.sh >> /home/orangepi/timelapse/logs/compile.log 2>&1
 
