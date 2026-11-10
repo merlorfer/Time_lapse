@@ -423,6 +423,8 @@ Kamera törlésekor a képei és a videói a lemezen maradnak. Átnevezéskor a 
 
 **IP kamera előnézete:** a *Preview indítás* az alstreamből élő képet mutat (kb. 5 kép/mp), a kiszolgáló csak a megnyitott oldal alatt dekódol. Az USB kamera előnézete továbbra is az `ustreamer` (:8081).
 
+**Leállítás:** a **■ Leállítás** gomb megerősítést kér (véletlen érintések ellen). Minden leállításról, bárhonnan is jött (weboldal vagy parancssor), **email megy** (*Kamera: a timelapse rögzítés le lett állítva* esemény, külön kapcsolható az email beállításoknál). A levélben szerepel a kamera, az időpont és a kezdeményező (a weboldalról leállításnál a kérő IP-címe is), így azonnal kiderül, ha nem te állítottad le.
+
 **Hiba esetén:** ha egy kamera képrögzítése 3 egymás utáni próbára sikertelen, a **Hibanapló** kap egy bejegyzést (és email megy, ha az *Kamera: a képrögzítés ismételten sikertelen* esemény be van kapcsolva); nyugtázásig ugyanez nem ismétlődik. Az IP kamera képéből ~4 mp alatt készül a kocka, a kamerák párhuzamosan rögzítenek, így egy lassú kamera nem tartja fel a többit.
 
 Parancssorból: `start_timelapse.sh --camera Garden`, `stop_timelapse.sh --camera Garden` (vagy `--all`), `render_now.sh --camera Garden`, `compile_daily.sh --camera Garden`, `build_master.sh --camera Garden`. Kamera megadása nélkül az USB kamerára vonatkoznak (a `compile_daily.sh` minden kamerára). A kamerák listája: `python3 /home/orangepi/timelapse/scripts/cameras.py names`.

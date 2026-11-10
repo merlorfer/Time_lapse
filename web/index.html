@@ -224,7 +224,7 @@ button:disabled { opacity: .35; cursor: not-allowed; }
         <div class="card-title" style="margin-bottom:8px">Timelapse rögzítés <span class="cam-name" style="text-transform:none;color:var(--text)"></span></div>
         <div class="btn-grid">
           <button class="btn-green" onclick="openStartModal()">▶ Indítás</button>
-          <button class="btn-red"   onclick="runScript('stop_timelapse')">■ Leállítás</button>
+          <button class="btn-red"   onclick="confirmStop()">■ Leállítás</button>
         </div>
       </div>
       <div style="margin-bottom:14px">
@@ -895,6 +895,16 @@ async function refreshStatus() {
 }
 
 // ── Script runner ────────────────────────────────────────────────────────────
+// Stopping needs a confirmation (accidental taps, especially on the phone)
+function confirmStop() {
+  const cs = lastStatus && lastStatus.cs;
+  if (cs && cs.active &&
+      !confirm(`Biztosan leállítod a(z) ${currentCamera} kamera timelapse rögzítését?
+
+A kamera addig nem készít új képeket, amíg újra nem indítod. A már rögzített képek megmaradnak.`)) return;
+  runScript('stop_timelapse');
+}
+
 const CAMERA_SCRIPTS = ['start_timelapse', 'stop_timelapse', 'render_now', 'compile_daily', 'build_master'];
 
 async function runScript(script, params = {}) {

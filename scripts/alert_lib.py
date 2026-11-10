@@ -47,6 +47,7 @@ EVENTS = [
     ("unit_reboot",         "Egység: a CLCode01 újraindult"),
     ("unit_unreachable",    "Egység: nem érhető el"),
     ("camera_error",        "Kamera: a képrögzítés ismételten sikertelen"),
+    ("timelapse_stopped",   "Kamera: a timelapse rögzítés le lett állítva (kézzel, a weboldalról vagy parancssorból)"),
 ]
 EVENT_IDS = {e[0] for e in EVENTS}
 EVENT_LABELS = dict(EVENTS)

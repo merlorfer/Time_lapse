@@ -1637,7 +1637,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         cmd  = ["bash", script_path] + args
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            # who asked: shown in the "timelapse stopped" email
+            env = dict(os.environ, TL_CALLER=f"weboldal ({self.client_address[0]})")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=env)
             self._send_json({
                 "ok":     result.returncode == 0,
                 "output": (result.stdout + result.stderr).strip(),

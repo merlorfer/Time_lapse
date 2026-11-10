@@ -45,6 +45,11 @@ with open(tmp, "w") as f:
 os.replace(tmp, path)
 PYEOF
 
+# Értesítés: aki nem ő állította le, így azonnal észreveszi (a sorból az email_dispatcher küldi)
+python3 "${SCRIPT_DIR}/send_alert.py" timelapse_stopped "${CAM}: a timelapse rögzítés le lett állítva" \
+    "A(z) ${CAM} kamera timelapse rögzítése le lett állítva ($(date '+%Y-%m-%d %H:%M:%S')). Kezdeményező: ${TL_CALLER:-parancssor}. Rögzített képek a ramdisken: ${FRAME_COUNT}. Újraindítás: a weboldal Indítás gombja. Rendszer: $(hostname)" \
+    >/dev/null 2>&1 || true
+
 echo "Timelapse leállítva: ${CAM}"
 echo "Indítva: ${STARTED}"
 echo "Rögzített képek: ${FRAME_COUNT} (${FRAME_DIR})"
